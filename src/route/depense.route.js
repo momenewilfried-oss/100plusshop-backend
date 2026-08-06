@@ -8,12 +8,24 @@ const {
   modifierDepense,
   supprimerDepense,
 } = require('../controllers/depense.controller');
+const { validateRequest } = require('../validators/validateRequest');
+const depenseSchemas = require('../validators/depense.validator');
 
 router.use(verifierToken);
 
 router.get('/', autoriserRoles('administrateur', 'gerant'), listerDepenses);
-router.post('/', autoriserRoles('administrateur', 'gerant'), creerDepense);
-router.put('/:id', autoriserRoles('administrateur', 'gerant'), modifierDepense);
+router.post(
+  '/',
+  autoriserRoles('administrateur', 'gerant'),
+  validateRequest(depenseSchemas.creer),
+  creerDepense
+);
+router.put(
+  '/:id',
+  autoriserRoles('administrateur', 'gerant'),
+  validateRequest(depenseSchemas.modifier),
+  modifierDepense
+);
 router.delete('/:id', autoriserRoles('administrateur'), supprimerDepense);
 
 module.exports = router;

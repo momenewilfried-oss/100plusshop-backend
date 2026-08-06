@@ -9,13 +9,25 @@ const {
   modifierClient,
   supprimerClient,
 } = require('../controllers/client.controller');
+const { validateRequest } = require('../validators/validateRequest');
+const clientSchemas = require('../validators/client.validator');
 
 router.use(verifierToken);
 
 router.get('/', autoriserRoles('administrateur', 'gerant', 'vendeur'), listerClients);
 router.get('/:id', autoriserRoles('administrateur', 'gerant', 'vendeur'), obtenirClient);
-router.post('/', autoriserRoles('administrateur', 'gerant', 'vendeur'), creerClient);
-router.put('/:id', autoriserRoles('administrateur', 'gerant'), modifierClient);
+router.post(
+  '/',
+  autoriserRoles('administrateur', 'gerant', 'vendeur'),
+  validateRequest(clientSchemas.creer),
+  creerClient
+);
+router.put(
+  '/:id',
+  autoriserRoles('administrateur', 'gerant'),
+  validateRequest(clientSchemas.modifier),
+  modifierClient
+);
 router.delete('/:id', autoriserRoles('administrateur'), supprimerClient);
 
 module.exports = router;

@@ -1,156 +1,30 @@
-const pool = require('../config/database');
+const achatService = require('../services/achat.service');
 
-function genererNumeroAchat() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  const rand = Math.floor(Math.random() * 9000) + 1000;
-  return `ACH-${y}${m}${day}-${rand}`;
-}
-
-async function listerAchats(req, res) {
+async function listerAchats(req, res, next) {
   try {
-    const [rows] = await pool.query(`
-      SELECT fa.*, f.nom AS fournisseur_nom
-      FROM facture_achat fa
-      JOIN fournisseur f ON fa.id_fournisseur = f.id_fournisseur
-      ORDER BY fa.date_achat DESC
-    `);
+    const rows = await achatService.listAchats();
     res.json(rows);
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ message: 'Erreur serveur', erreur: e.message });
+  } catch (erreur) {
+    next(erreur);
   }
 }
 
-async function obtenirAchat(req, res) {
+async function obtenirAchat(req, res, next) {
   try {
-    const { id } = req.params;
-
-    const [rows] = await pool.query(
-      `SELECT fa.*, f.nom AS fournisseur_nom, f.email AS fournisseur_email
-       FROM facture_achat fa
-       JOIN fournisseur f ON fa.id_fournisseur = f.id_fournisseur
-       WHERE fa.id_facture_achat = ?`,
-      [id]
-    );
-
-    if (rows.length === 0) {
-      return res.status(404).json({ message: 'Achat introuvable' });
-    }
-
-    const [details] = await pool.query(
-      `SELECT da.*, p.nom AS produit_nom, p.reference, v.taille, v.couleur
-       FROM detail_achat da
-       JOIN variante v ON da.id_variante = v.id_variante
-       JOIN produit p ON v.id_produit = p.id_produit
-       WHERE da.id_facture_achat = ?`,
-      [id]
-    );
-
-    res.json({ ...rows[0], details });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ message: 'Erreur serveur', erreur: e.message });
+    const result = await achatService.getAchat(req.params.id);
+    if (!result) return res.status(404).json({ message: 'Achat introuvable' });
+    res.json(result);
+  } catch (erreur) {
+    next(erreur);
   }
 }
 
-async function creerAchat(req, res) {
-  const db = await pool.getConnection();
-
+async function creerAchat(req, res, next) {
   try {
-    const { idFournisseur, lignes } = req.body || {};
-
-    if (!idFournisseur || !lignes || lignes.length === 0) {
-      db.release();
-      return res.status(400).json({
-        message: 'idFournisseur et lignes (non vide) obligatoires',
-      });
-    }
-
-    await db.beginTransaction();
-
-    const [four] = await db.query(
-      'SELECT id_fournisseur FROM fournisseur WHERE id_fournisseur = ?',
-      [idFournisseur]
-    );
-    if (four.length === 0) throw new Error('Fournisseur introuvable');
-
-    let montantTotal = 0;
-    for (const l of lignes) {
-      if (!l.idVariante || !l.quantite || l.prixUnitaire == null) {
-        throw new Error('Chaque ligne doit avoir idVariante, quantite, prixUnitaire');
-      }
-
-      const [v] = await db.query(
-        'SELECT id_variante FROM variante WHERE id_variante = ?',
-        [l.idVariante]
-      );
-      if (v.length === 0) {
-        throw new Error(`Variante ${l.idVariante} introuvable`);
-      }
-
-      montantTotal += Number(l.quantite) * Number(l.prixUnitaire);
-    }
-
-    const numero = genererNumeroAchat();
-
-    const [fa] = await db.query(
-      `INSERT INTO facture_achat
-       (id_fournisseur, numero, date_achat, montant_total, statut)
-       VALUES (?, ?, NOW(), ?, 'recue')`,
-      [idFournisseur, numero, montantTotal]
-    );
-    const idAchat = fa.insertId;
-
-    for (const l of lignes) {
-      const sousTotal = Number(l.quantite) * Number(l.prixUnitaire);
-
-      // ★ colonne BDD = prix_achat (pas prix_unitaire)
-      await db.query(
-        `INSERT INTO detail_achat
-         (id_facture_achat, id_variante, quantite, prix_achat, sous_total)
-         VALUES (?, ?, ?, ?, ?)`,
-        [idAchat, l.idVariante, l.quantite, l.prixUnitaire, sousTotal]
-      );
-
-      await db.query(
-        'UPDATE variante SET stock = stock + ? WHERE id_variante = ?',
-        [l.quantite, l.idVariante]
-      );
-
-      await db.query(
-        `INSERT INTO mouvement_stock
-         (variante, typeMouvement, quantite, motif, documentType, documentId, dateMouvement)
-         VALUES (?, 'entree', ?, 'achat fournisseur', 'achat', ?, NOW())`,
-        [l.idVariante, l.quantite, idAchat]
-      );
-    }
-
-    await db.commit();
-
-    const [achat] = await pool.query(
-      'SELECT * FROM facture_achat WHERE id_facture_achat = ?',
-      [idAchat]
-    );
-    const [details] = await pool.query(
-      'SELECT * FROM detail_achat WHERE id_facture_achat = ?',
-      [idAchat]
-    );
-
-    res.status(201).json({ ...achat[0], details });
-  } catch (e) {
-    await db.rollback();
-    console.error(e);
-
-    if (e.message.includes('introuvable') || e.message.includes('ligne')) {
-      return res.status(409).json({ message: e.message });
-    }
-
-    res.status(500).json({ message: 'Erreur serveur', erreur: e.message });
-  } finally {
-    db.release();
+    const result = await achatService.createAchat(req.body || {});
+    res.status(201).json(result);
+  } catch (erreur) {
+    next(erreur);
   }
 }
 

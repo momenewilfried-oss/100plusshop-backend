@@ -8,7 +8,9 @@
     "dev": "nodemon src/app.js",
     "create-admin": "node scripts/create-admin.js",
     "health": "node scripts/smoke-test.js",
-    "test": "node scripts/smoke-test.js"
+    "backup": "node scripts/backup-db.js",
+    "test:critical": "node scripts/critical-tests.js",
+    "test": "node scripts/smoke-test.js && node scripts/critical-tests.js"
   },
   "keywords": [
     "pos",

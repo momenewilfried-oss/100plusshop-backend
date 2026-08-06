@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const logger = require('./helpers/logger');
 const rateLimit = require('express-rate-limit');
 
 let helmet;
@@ -24,6 +25,8 @@ const rapportsRoutes = require('./route/rapport.route');
 const fournisseursRoutes = require('./route/fournisseur.route');
 const achatsRoutes = require('./route/achat.route');
 const promotionsRoutes = require('./route/promotion.route');
+const auditRoutes = require('./route/audit.route');
+const corbeilleRoutes = require('./route/corbeille.route');
 
 const app = express();
 const isProd = process.env.NODE_ENV === 'production';
@@ -100,11 +103,10 @@ app.use((req, res, next) => {
     const user = req.utilisateur
       ? ` [user=${req.utilisateur.id}|${req.utilisateur.role}]`
       : '';
-    console.log(
-      `${couleur}${String(req.method).padEnd(7)}${reset} ` +
-        `${String(req.originalUrl).padEnd(42)} ` +
-        `${couleur}${statut}${reset} ${duree}ms${user}`
-    );
+    const line = `${req.method} ${req.originalUrl} ${statut} ${duree}ms${user}`;
+    if (statut >= 500) logger.error(line);
+    else if (statut >= 400) logger.warn(line);
+    else logger.info(line);
   });
   next();
 });
@@ -123,6 +125,8 @@ app.use('/api/rapports', rapportsRoutes);
 app.use('/api/fournisseurs', fournisseursRoutes);
 app.use('/api/achats', achatsRoutes);
 app.use('/api/promotions', promotionsRoutes);
+app.use('/api/audit', auditRoutes);
+app.use('/api/corbeille', corbeilleRoutes);
 
 app.use(express.static(path.join(__dirname, '../public')));
 
@@ -150,21 +154,16 @@ app.use('/api', (req, res) => {
   });
 });
 
-app.use((err, req, res, next) => {
-  console.error('\x1b[31m[ERREUR]\x1b[0m', err.message);
-  const status = err.status || 500;
-  res.status(status).json({
-    message: status === 500 && isProd ? 'Erreur serveur' : err.message || 'Erreur serveur',
-  });
-});
+const { errorHandler } = require('./utils/error-handler');
+app.use(errorHandler);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 100PLUSSHOP API v1.1.0 — http://localhost:${PORT}`);
+  console.log(` 100PLUSSHOP API v1.1.0 — http://localhost:${PORT}`);
   if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 16) {
-    console.warn('⚠️  JWT_SECRET manquant ou trop court');
+    console.warn('  JWT_SECRET manquant ou trop court');
   }
   if (!helmet) {
-    console.warn('⚠️  Package "helmet" non installé — npm install helmet express-rate-limit');
+    console.warn('  Package "helmet" non installé — npm install helmet express-rate-limit');
   }
 });
