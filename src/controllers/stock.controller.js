@@ -11,8 +11,10 @@ async function resumeStocks(req, res, next) {
 
 async function listerMouvements(req, res, next) {
   try {
-    const rows = await stockService.listerMouvements();
-    res.json(rows);
+    const page = req.query.page;
+    const limit = req.query.limit;
+    const result = await stockService.listerMouvements({ page, limit });
+    res.json(result);
   } catch (erreur) {
     next(erreur);
   }

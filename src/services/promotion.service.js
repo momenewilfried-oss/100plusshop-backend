@@ -102,8 +102,16 @@ async function createPromotion({ nom, type, valeur, dateDebut, dateFin, date_deb
       }
     }
     await db.commit();
-    const [row] = await db.query('SELECT * FROM promotion WHERE id_promotion = ? OR idPromotion = ?', [insertId, insertId]).catch(() => db.query('SELECT * FROM promotion WHERE idPromotion = ?', [insertId]));
-    return row[0] || { id_promotion: insertId, nom, type, valeur };
+    // Schéma réel = id_promotion / date_debut / date_fin
+    try {
+      const [row] = await pool.query(
+        'SELECT id_promotion, nom, type, valeur, date_debut, date_fin, statut FROM promotion WHERE id_promotion = ?',
+        [insertId]
+      );
+      return row[0] || { id_promotion: insertId, nom, type, valeur, date_debut: dDebut, date_fin: dFin, statut: statut || 'active' };
+    } catch {
+      return { id_promotion: insertId, nom, type, valeur, date_debut: dDebut, date_fin: dFin, statut: statut || 'active' };
+    }
   } catch (e) {
     await db.rollback();
     throw e;

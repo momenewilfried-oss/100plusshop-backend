@@ -7,11 +7,11 @@ async function resumeStocks() {
   return stockRepository.resumeStocks();
 }
 
-async function listerMouvements() {
+async function listerMouvements({ page, limit } = {}) {
   try {
-    return await stockRepository.listMouvements();
+    return await stockRepository.listMouvements({ page, limit });
   } catch (e) {
-    return [];
+    return { data: [], total: 0, page: 1, limit: Number(limit) || 15, totalPages: 1 };
   }
 }
 

@@ -77,8 +77,12 @@ async function creerFactureDepuisVente({ idVente, statut }) {
     if (ventes.length === 0) throw new ApiError(409, 'Vente introuvable');
     const vente = ventes[0];
     if (vente.statut === 'annulee') throw new ApiError(409, 'Impossible de facturer une vente annulée');
-    const [existantes] = await db.query('SELECT id_facture FROM facture WHERE id_vente = ?', [idVente]);
-    if (existantes.length > 0) throw new ApiError(409, 'Une facture existe déjà pour cette vente');
+    // Idempotent : si une facture existe déjà pour cette vente, on la renvoie
+    const [existantes] = await db.query('SELECT * FROM facture WHERE id_vente = ?', [idVente]);
+    if (existantes.length > 0) {
+      await db.commit();
+      return existantes[0];
+    }
     const numero = genererNumero();
     const [result] = await db.query(
       `INSERT INTO facture (numero, date_facture, id_vente, montant_total, statut)
