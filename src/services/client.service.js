@@ -1,4 +1,5 @@
 const { ApiError } = require('../utils/error-handler');
+const { assertEmailOptional, assertPhoneOptional } = require('../utils/validators');
 const clientRepository = require('../repositories/client.repository');
 const { logAction } = require('./audit.service');
 
@@ -13,8 +14,10 @@ async function obtenirClient(id) {
 }
 
 async function creerClient(body, user) {
-  const { nom, prenom, telephone, email } = body || {};
+  const { nom, prenom } = body || {};
   if (!nom && !prenom) throw new ApiError(400, 'nom ou prenom obligatoire');
+  const email = assertEmailOptional(body?.email, ApiError);
+  const telephone = assertPhoneOptional(body?.telephone, ApiError);
   const id = await clientRepository.createClient({ nom, prenom, telephone, email });
   const created = await clientRepository.getClientById(id);
   await logAction({
@@ -29,7 +32,14 @@ async function creerClient(body, user) {
 async function modifierClient(id, body, user) {
   const before = await clientRepository.getClientById(id);
   if (!before) throw new ApiError(404, 'Client introuvable');
-  await clientRepository.updateClient(id, body || {});
+  const payload = { ...(body || {}) };
+  if (payload.email !== undefined) {
+    payload.email = assertEmailOptional(payload.email, ApiError);
+  }
+  if (payload.telephone !== undefined) {
+    payload.telephone = assertPhoneOptional(payload.telephone, ApiError);
+  }
+  await clientRepository.updateClient(id, payload);
   const after = await clientRepository.getClientById(id);
   await logAction({
     userId: user?.id || null,

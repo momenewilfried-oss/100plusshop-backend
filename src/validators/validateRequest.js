@@ -1,4 +1,5 @@
 const { ApiError } = require('../utils/error-handler');
+const { isValidEmail } = require('../utils/validators');
 
 function typeOf(value) {
   if (value === null) return 'null';
@@ -16,7 +17,7 @@ function validateShape(obj, shape, path = '') {
       errors.push({ field: fullKey, message: 'Champ requis' });
       continue;
     }
-    if (val === undefined || val === null) continue;
+    if (val === undefined || val === null || val === '') continue;
 
     const t = typeOf(val);
     if (rule.type && rule.type !== t) {
@@ -47,6 +48,12 @@ function validateShape(obj, shape, path = '') {
     }
     if (rule.pattern && !new RegExp(rule.pattern).test(String(val))) {
       errors.push({ field: fullKey, message: 'Format invalide' });
+    }
+    if (rule.format === 'email' && !isValidEmail(val)) {
+      errors.push({
+        field: fullKey,
+        message: 'Adresse e-mail invalide (ex. : nom@domaine.com)',
+      });
     }
 
     if (rule.properties && t === 'object') {

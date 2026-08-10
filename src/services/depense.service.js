@@ -11,10 +11,14 @@ async function creerDepense(body, user) {
   if (!libelle || montant == null) {
     throw new ApiError(400, 'libelle et montant obligatoires');
   }
+  const m = Number(montant);
+  if (!(m > 0)) {
+    throw new ApiError(400, 'Le montant doit être supérieur à zéro');
+  }
   const id = await depenseRepository.createDepense({
-    libelle,
-    categorie,
-    montant,
+    libelle: String(libelle).trim(),
+    categorie: categorie || 'autre',
+    montant: m,
     dateDepense,
     idUtilisateur: user?.id || null,
   });
@@ -28,13 +32,22 @@ async function creerDepense(body, user) {
 }
 
 async function modifierDepense(id, body, user) {
-  const affected = await depenseRepository.updateDepense(id, body || {});
+  const payload = { ...(body || {}) };
+  if (payload.montant != null) {
+    const m = Number(payload.montant);
+    if (!(m > 0)) {
+      throw new ApiError(400, 'Le montant doit être supérieur à zéro');
+    }
+    payload.montant = m;
+  }
+  if (payload.libelle != null) payload.libelle = String(payload.libelle).trim();
+  const affected = await depenseRepository.updateDepense(id, payload);
   if (!affected) throw new ApiError(404, 'Dépense introuvable');
   await logAction({
     userId: user?.id || null,
     module: 'depense',
     action: 'UPDATE',
-    newValue: { id, ...body },
+    newValue: { id, ...payload },
   });
   return { message: 'Dépense modifiée' };
 }

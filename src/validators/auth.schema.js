@@ -12,6 +12,8 @@ const login = {
   body: {
     email: { required: true, type: 'string' },
     motDePasse: { required: true, type: 'string' },
+    remember: { required: false },
+    resterConnecte: { required: false },
   },
 };
 

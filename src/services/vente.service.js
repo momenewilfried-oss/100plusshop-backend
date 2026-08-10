@@ -115,9 +115,22 @@ async function creerVente({ idClient, remiseGlobale, modePaiementPrincipal, lign
     const venteFinale = await venteRepository.getSaleFinal(pool, idVente);
     const detailsFinaux = await venteRepository.getSaleDetailsFinal(pool, idVente);
 
+    // Facture générée automatiquement côté serveur (plus fiable que le seul front)
+    let facture = null;
+    try {
+      const factureService = require('./facture.service');
+      facture = await factureService.creerFactureDepuisVente({
+        idVente: Number(idVente),
+        statut: 'Payée',
+      }, currentUser);
+    } catch (e) {
+      console.error('[vente] génération auto facture échouée:', e.message);
+    }
+
     return {
       ...venteFinale,
       details: detailsFinaux,
+      facture,
       promos: lignesCalculees
         .filter((l) => l.promoAppliquee)
         .map((l) => ({ idVariante: l.idVariante, promo: l.promoAppliquee, remise: l.remise })),
@@ -169,5 +182,4 @@ async function annulerVente(id) {
     connection.release();
   }
 }
-
-module.exports = { listerVentes, obtenirVente, creerVente, annulerVente };
+module.exports = { listerVentes, obtenirVente, creerVente, annulerVente }

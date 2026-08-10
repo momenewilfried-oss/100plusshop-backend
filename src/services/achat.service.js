@@ -10,6 +10,25 @@ function genererNumeroAchat() {
   return `ACH-${y}${m}${day}-${rand}`;
 }
 
+/** Récupère l'id généré après INSERT (MySQL insertId ou PG RETURNING) */
+function extractInsertId(result, ...keys) {
+  if (!result) return null;
+  if (result.insertId != null && result.insertId !== '') {
+    const n = Number(result.insertId);
+    if (!Number.isNaN(n) && n > 0) return n;
+  }
+  const row = Array.isArray(result) ? result[0] : null;
+  if (row && typeof row === 'object') {
+    for (const k of keys) {
+      if (row[k] != null) {
+        const n = Number(row[k]);
+        if (!Number.isNaN(n) && n > 0) return n;
+      }
+    }
+  }
+  return null;
+}
+
 async function listAchats() {
   const [rows] = await pool.query(`
     SELECT fa.*, f.nom AS fournisseur_nom
@@ -46,43 +65,74 @@ async function createAchat({ idFournisseur, lignes } = {}) {
     if (!idFournisseur || !lignes || lignes.length === 0) {
       throw new ApiError(400, 'idFournisseur et lignes (non vide) obligatoires');
     }
+
     await db.beginTransaction();
-    const [four] = await db.query('SELECT id_fournisseur FROM fournisseur WHERE id_fournisseur = ?', [idFournisseur]);
-    if (four.length === 0) throw new ApiError(409, 'Fournisseur introuvable');
+
+    const [four] = await db.query(
+      'SELECT id_fournisseur FROM fournisseur WHERE id_fournisseur = ?',
+      [idFournisseur]
+    );
+    if (!four || four.length === 0) {
+      throw new ApiError(404, 'Fournisseur introuvable');
+    }
 
     let montantTotal = 0;
     for (const l of lignes) {
       if (!l.idVariante || !l.quantite || l.prixUnitaire == null) {
-        throw new ApiError(409, 'Chaque ligne doit avoir idVariante, quantite, prixUnitaire');
+        throw new ApiError(
+          400,
+          'Chaque ligne doit avoir idVariante, quantite, prixUnitaire'
+        );
       }
-      const [v] = await db.query('SELECT id_variante FROM variante WHERE id_variante = ?', [l.idVariante]);
-      if (v.length === 0) throw new ApiError(409, `Variante ${l.idVariante} introuvable`);
+      if (Number(l.quantite) <= 0) {
+        throw new ApiError(400, 'La quantité doit être supérieure à 0');
+      }
+      if (Number(l.prixUnitaire) < 0) {
+        throw new ApiError(400, 'Le prix unitaire ne peut pas être négatif');
+      }
+      const [v] = await db.query(
+        'SELECT id_variante FROM variante WHERE id_variante = ?',
+        [l.idVariante]
+      );
+      if (!v || v.length === 0) {
+        throw new ApiError(404, `Variante ${l.idVariante} introuvable`);
+      }
       montantTotal += Number(l.quantite) * Number(l.prixUnitaire);
     }
 
     const numero = genererNumeroAchat();
     const [fa] = await db.query(
       `INSERT INTO facture_achat
-       (id_fournisseur, numero, date_achat, montant_total, statut)
+         (id_fournisseur, numero, date_achat, montant_total, statut)
        VALUES (?, ?, NOW(), ?, 'recue')`,
       [idFournisseur, numero, montantTotal]
     );
-    const idAchat = fa.insertId;
+
+    const idAchat = extractInsertId(fa, 'id_facture_achat');
+    if (!idAchat) {
+      throw new ApiError(
+        500,
+        "Impossible d'obtenir l'identifiant de la facture d'achat (insertId manquant)"
+      );
+    }
 
     for (const l of lignes) {
       const sousTotal = Number(l.quantite) * Number(l.prixUnitaire);
       await db.query(
         `INSERT INTO detail_achat
-         (id_facture_achat, id_variante, quantite, prix_achat, sous_total)
+           (id_facture_achat, id_variante, quantite, prix_achat, sous_total)
          VALUES (?, ?, ?, ?, ?)`,
         [idAchat, l.idVariante, l.quantite, l.prixUnitaire, sousTotal]
       );
 
-      await db.query('UPDATE variante SET stock = stock + ? WHERE id_variante = ?', [l.quantite, l.idVariante]);
+      await db.query(
+        'UPDATE variante SET stock = stock + ? WHERE id_variante = ?',
+        [l.quantite, l.idVariante]
+      );
 
       await db.query(
         `INSERT INTO mouvement_stock
-         (variante, typeMouvement, quantite, motif, documentType, documentId, dateMouvement)
+           (variante, typeMouvement, quantite, motif, documentType, documentId, dateMouvement)
          VALUES (?, 'entree', ?, 'achat fournisseur', 'achat', ?, NOW())`,
         [l.idVariante, l.quantite, idAchat]
       );
@@ -90,11 +140,19 @@ async function createAchat({ idFournisseur, lignes } = {}) {
 
     await db.commit();
 
-    const [achat] = await pool.query('SELECT * FROM facture_achat WHERE id_facture_achat = ?', [idAchat]);
-    const [details] = await pool.query('SELECT * FROM detail_achat WHERE id_facture_achat = ?', [idAchat]);
+    const [achat] = await pool.query(
+      'SELECT * FROM facture_achat WHERE id_facture_achat = ?',
+      [idAchat]
+    );
+    const [details] = await pool.query(
+      'SELECT * FROM detail_achat WHERE id_facture_achat = ?',
+      [idAchat]
+    );
     return { ...achat[0], details };
   } catch (e) {
-    await db.rollback();
+    try {
+      await db.rollback();
+    } catch (_) {}
     throw e;
   } finally {
     db.release();

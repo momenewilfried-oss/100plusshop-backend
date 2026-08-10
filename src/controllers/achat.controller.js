@@ -21,7 +21,7 @@ async function obtenirAchat(req, res, next) {
 
 async function creerAchat(req, res, next) {
   try {
-    const result = await achatService.createAchat(req.body || {});
+    const result = await achatService.createAchat(req.body || {}, req.utilisateur);
     res.status(201).json(result);
   } catch (erreur) {
     next(erreur);

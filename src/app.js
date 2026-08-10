@@ -35,7 +35,7 @@ const isProd = process.env.NODE_ENV === 'production';
 if (helmet) {
   app.use(
     helmet({
-      contentSecurityPolicy: false, // API JSON uniquement
+      contentSecurityPolicy: false,
       crossOriginResourcePolicy: { policy: 'cross-origin' },
     })
   );
@@ -50,15 +50,25 @@ const allowedOrigins = (process.env.CORS_ORIGINS || '')
 const corsOptions = {
   origin(origin, callback) {
     if (!origin) return callback(null, true);
+
+    // CORS_ORIGINS=* → tout autoriser
+    if (allowedOrigins.includes('*')) {
+      return callback(null, true);
+    }
+
+    // Localhost / 127.0.0.1 toujours OK en dev
     if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
       return callback(null, true);
     }
+
     if (allowedOrigins.length > 0 && allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
+
     if (!isProd && allowedOrigins.length === 0) {
       return callback(null, true);
     }
+
     callback(new Error('Origine non autorisée par CORS'));
   },
   credentials: true,
@@ -69,7 +79,7 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '1mb' }));
 
-// ---------- Rate limiting (anti brute-force) ----------
+// ---------- Rate limiting ----------
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: Number(process.env.RATE_LIMIT_AUTH || 30),
@@ -95,11 +105,6 @@ app.use((req, res, next) => {
   res.on('finish', () => {
     const duree = Date.now() - debut;
     const statut = res.statusCode;
-    let couleur = '\x1b[32m';
-    if (statut >= 500) couleur = '\x1b[31m';
-    else if (statut >= 400) couleur = '\x1b[33m';
-    else if (statut >= 300) couleur = '\x1b[36m';
-    const reset = '\x1b[0m';
     const user = req.utilisateur
       ? ` [user=${req.utilisateur.id}|${req.utilisateur.role}]`
       : '';
@@ -158,12 +163,28 @@ const { errorHandler } = require('./utils/error-handler');
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(` 100PLUSSHOP API v1.1.0 — http://localhost:${PORT}`);
+
   if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 16) {
     console.warn('  JWT_SECRET manquant ou trop court');
   }
   if (!helmet) {
-    console.warn('  Package "helmet" non installé — npm install helmet express-rate-limit');
+    console.warn(
+      '  Package "helmet" non installé — npm install helmet express-rate-limit'
+    );
+  }
+
+  // Test connexion base au démarrage
+  try {
+    const pool = require('./config/database');
+    await pool.query('SELECT 1 AS ok');
+    console.log('  Base de données : OK');
+  } catch (e) {
+    console.error('  Base de données : ERREUR —', e.message);
+    console.error('  Vérifiez DB_HOST / DB_USER / DB_PASSWORD dans .env');
+    console.error(
+      '  Et que les tables sont importées dans Supabase (SQL Editor).'
+    );
   }
 });

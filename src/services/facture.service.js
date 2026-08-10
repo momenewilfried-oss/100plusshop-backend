@@ -1,4 +1,5 @@
 const { ApiError } = require('../utils/error-handler');
+const { logAction } = require('./audit.service');
 const pool = require('../config/database');
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
@@ -68,7 +69,7 @@ async function obtenirFacture(id) {
   return { ...facture, details };
 }
 
-async function creerFactureDepuisVente({ idVente, statut }) {
+async function creerFactureDepuisVente({ idVente, statut }, user = null) {
   if (!idVente) throw new ApiError(400, 'idVente obligatoire');
   const db = await pool.getConnection();
   try {
@@ -89,9 +90,28 @@ async function creerFactureDepuisVente({ idVente, statut }) {
        VALUES (?, NOW(), ?, ?, ?)`,
       [numero, idVente, vente.montant_total, statut || 'Payée']
     );
+    const idFacture = Number(
+      result.insertId ?? result[0]?.id_facture ?? result.rows?.[0]?.id_facture
+    );
+    if (!idFacture) {
+      throw new ApiError(500, 'INSERT facture: id_facture non retourné');
+    }
     await db.commit();
-    const [facture] = await pool.query('SELECT * FROM facture WHERE id_facture = ?', [result.insertId]);
-    return facture[0];
+    const [facture] = await pool.query('SELECT * FROM facture WHERE id_facture = ?', [idFacture]);
+    const row = facture[0];
+    await logAction({
+      userId: user?.id || null,
+      module: 'facture',
+      action: 'CREATE',
+      newValue: {
+        id_facture: idFacture,
+        id_vente: idVente,
+        numero: row?.numero,
+        montant_total: row?.montant_total,
+        statut: row?.statut,
+      },
+    });
+    return row;
   } catch (e) {
     await db.rollback();
     throw e;
@@ -100,7 +120,7 @@ async function creerFactureDepuisVente({ idVente, statut }) {
   }
 }
 
-async function modifierStatutFacture(id, statut) {
+async function modifierStatutFacture(id, statut, user = null) {
   const statutsValides = ['Payée', 'En attente', 'Retard', 'Brouillon', 'Annulée'];
   if (!statut || !statutsValides.includes(statut)) {
     throw new ApiError(400, `Statut invalide. Valeurs possibles : ${statutsValides.join(', ')}`);
@@ -108,7 +128,14 @@ async function modifierStatutFacture(id, statut) {
   const [result] = await pool.query('UPDATE facture SET statut = ? WHERE id_facture = ?', [statut, id]);
   if (result.affectedRows === 0) throw new ApiError(404, 'Facture introuvable');
   const [facture] = await pool.query('SELECT * FROM facture WHERE id_facture = ?', [id]);
-  return facture[0];
+  const row = facture[0];
+  await logAction({
+    userId: user?.id || null,
+    module: 'facture',
+    action: 'STATUS',
+    newValue: { id_facture: Number(id), statut },
+  });
+  return row;
 }
 
 async function resumeFactures() {
@@ -116,8 +143,8 @@ async function resumeFactures() {
   const [payees] = await pool.query(`
     SELECT COALESCE(SUM(montant_total), 0) AS recettes
     FROM facture WHERE statut = 'Payée'
-      AND MONTH(date_facture) = MONTH(CURDATE())
-      AND YEAR(date_facture) = YEAR(CURDATE())
+      AND date_facture >= date_trunc('month', CURRENT_DATE)
+      AND date_facture < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'
   `);
   const [enAttente] = await pool.query(`
     SELECT COALESCE(SUM(montant_total), 0) AS montant

@@ -1,5 +1,9 @@
 const { ApiError } = require('../utils/error-handler');
 const pool = require('../config/database');
+const {
+  assertPourcentage,
+  assertMontantPromo,
+} = require('../utils/validators');
 
 async function listPromotions() {
   try {
@@ -63,7 +67,8 @@ async function getPromotion(id) {
   return { ...promo, variantes };
 }
 
-async function createPromotion({ nom, type, valeur, dateDebut, dateFin, date_debut, date_fin, statut, variantes } = {}) {
+async function createPromotion({ nom, type, valeur: valeurIn, dateDebut, dateFin, date_debut, date_fin, statut, variantes } = {}) {
+  let valeur = valeurIn;
   const dDebut = date_debut || dateDebut;
   const dFin = date_fin || dateFin;
   if (!nom || !type || valeur == null || !dDebut || !dFin) {
@@ -71,6 +76,14 @@ async function createPromotion({ nom, type, valeur, dateDebut, dateFin, date_deb
   }
   if (!['pourcentage', 'montant'].includes(String(type))) {
     throw new ApiError(400, 'type doit être « pourcentage » ou « montant »');
+  }
+  if (String(type) === 'pourcentage') {
+    valeur = assertPourcentage(valeur, ApiError);
+  } else {
+    valeur = assertMontantPromo(valeur, ApiError);
+  }
+  if (new Date(dFin) < new Date(dDebut)) {
+    throw new ApiError(400, 'La date de fin doit être postérieure à la date de début');
   }
   const db = await pool.getConnection();
   try {
@@ -120,9 +133,24 @@ async function createPromotion({ nom, type, valeur, dateDebut, dateFin, date_deb
   }
 }
 
-async function updatePromotion(id, { nom, type, valeur, dateDebut, dateFin, date_debut, date_fin, statut } = {}) {
+async function updatePromotion(id, { nom, type, valeur: valeurIn, dateDebut, dateFin, date_debut, date_fin, statut } = {}) {
+  let valeur = valeurIn;
   const dDebut = date_debut || dateDebut;
   const dFin = date_fin || dateFin;
+  if (valeur != null && type === 'pourcentage') {
+    valeur = assertPourcentage(valeur, ApiError);
+  } else if (valeur != null && type === 'montant') {
+    valeur = assertMontantPromo(valeur, ApiError);
+  } else if (valeur != null && !type) {
+    // type inconnu : plafonner si > 100 (probablement un %)
+    const v = Number(valeur);
+    if (!Number.isNaN(v) && v > 100) {
+      throw new ApiError(400, 'La valeur de promotion ne peut pas dépasser 100 pour un pourcentage');
+    }
+  }
+  if (dDebut && dFin && new Date(dFin) < new Date(dDebut)) {
+    throw new ApiError(400, 'La date de fin doit être postérieure à la date de début');
+  }
   try {
     const [ex] = await pool.query('SELECT id_promotion FROM promotion WHERE id_promotion = ?', [id]);
     if (ex.length === 0) throw new ApiError(404, 'Promotion introuvable');

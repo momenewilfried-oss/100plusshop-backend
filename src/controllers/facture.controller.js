@@ -21,7 +21,7 @@ async function obtenirFacture(req, res, next) {
 
 async function creerFactureDepuisVente(req, res, next) {
   try {
-    const result = await factureService.creerFactureDepuisVente(req.body || {});
+    const result = await factureService.creerFactureDepuisVente(req.body || {}, req.utilisateur);
     res.status(201).json(result);
   } catch (erreur) {
     next(erreur);
@@ -30,7 +30,7 @@ async function creerFactureDepuisVente(req, res, next) {
 
 async function modifierStatutFacture(req, res, next) {
   try {
-    const result = await factureService.modifierStatutFacture(req.params.id, req.body.statut);
+    const result = await factureService.modifierStatutFacture(req.params.id, req.body.statut, req.utilisateur);
     res.json(result);
   } catch (erreur) {
     next(erreur);

@@ -10,28 +10,63 @@ function calculateEvolution(current, previous) {
   return Math.max(-100, Math.min(100, evolutionCa));
 }
 
-async function getDashboard() {
-  const caAujourdhui = await dashboardRepository.getCaForDate('DATE(date_vente) = CURDATE()');
-  const caVeille = await dashboardRepository.getCaForDate("DATE(date_vente) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)");
-  const evolutionCa = calculateEvolution(caAujourdhui, caVeille);
+async function safe(promise, fallback) {
+  try {
+    return await promise;
+  } catch (e) {
+    console.error('[dashboard]', e.message);
+    return fallback;
+  }
+}
 
-  const nbCommandes = await dashboardRepository.getCountSalesForDate('DATE(date_vente) = CURDATE()');
-  const stockTotal = await dashboardRepository.getTotalStock();
-  const nouveauxClients = await dashboardRepository.getNewClientsThisMonth();
-  const alertesStock = await dashboardRepository.getStockAlerts(10);
-  const performance7j = await dashboardRepository.getSalesPerformance(7);
-  const dernieresVentes = await dashboardRepository.getLatestSales(5);
+/**
+ * Conditions de date en PostgreSQL (pas de MONTH/CURDATE MySQL).
+ */
+async function getDashboard() {
+  const [
+    statsAujourdhui,
+    statsVeille,
+    stockTotal,
+    nouveauxClients,
+    alertesStock,
+    performance7j,
+    dernieresVentes,
+  ] = await Promise.all([
+    safe(
+      dashboardRepository.getSalesStatsForDate(
+        "(date_vente)::date = CURRENT_DATE"
+      ),
+      { ca: 0, nb_commandes: 0 }
+    ),
+    safe(
+      dashboardRepository.getSalesStatsForDate(
+        "(date_vente)::date = (CURRENT_DATE - INTERVAL '1 day')::date"
+      ),
+      { ca: 0, nb_commandes: 0 }
+    ),
+    safe(dashboardRepository.getTotalStock(), 0),
+    safe(dashboardRepository.getNewClientsThisMonth(), 0),
+    safe(dashboardRepository.getStockAlerts(10), []),
+    safe(dashboardRepository.getSalesPerformance(7), []),
+    safe(dashboardRepository.getLatestSales(5), []),
+  ]);
+
+  const caAujourdhui = Number(statsAujourdhui.ca || 0);
+  const evolutionCa = calculateEvolution(
+    caAujourdhui,
+    Number(statsVeille.ca || 0)
+  );
 
   return {
     ca_jour: caAujourdhui,
     evolution_ca: evolutionCa,
-    nb_commandes: nbCommandes,
+    nb_commandes: Number(statsAujourdhui.nb_commandes || 0),
     stock_total: stockTotal,
     nouveaux_clients: nouveauxClients,
-    nb_alertes: alertesStock.length,
-    alertes_stock: alertesStock,
-    performance_7j: performance7j,
-    dernieres_ventes: dernieresVentes,
+    nb_alertes: Array.isArray(alertesStock) ? alertesStock.length : 0,
+    alertes_stock: alertesStock || [],
+    performance_7j: performance7j || [],
+    dernieres_ventes: dernieresVentes || [],
   };
 }
 

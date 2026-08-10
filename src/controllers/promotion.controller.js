@@ -21,7 +21,7 @@ async function obtenirPromotion(req, res, next) {
 
 async function creerPromotion(req, res, next) {
   try {
-    const row = await promotionService.createPromotion(req.body || {});
+    const row = await promotionService.createPromotion(req.body || {}, req.utilisateur);
     res.status(201).json(row);
   } catch (erreur) {
     next(erreur);
@@ -30,7 +30,7 @@ async function creerPromotion(req, res, next) {
 
 async function modifierPromotion(req, res, next) {
   try {
-    const row = await promotionService.updatePromotion(req.params.id, req.body || {});
+    const row = await promotionService.updatePromotion(req.params.id, req.body || {}, req.utilisateur);
     res.json(row);
   } catch (erreur) {
     next(erreur);
@@ -39,7 +39,7 @@ async function modifierPromotion(req, res, next) {
 
 async function supprimerPromotion(req, res, next) {
   try {
-    const result = await promotionService.deletePromotion(req.params.id);
+    const result = await promotionService.deletePromotion(req.params.id, req.utilisateur);
     res.json(result);
   } catch (erreur) {
     next(erreur);

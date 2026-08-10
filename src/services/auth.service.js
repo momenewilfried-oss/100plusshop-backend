@@ -99,10 +99,12 @@ async function inscription({ nom, prenom, email, telephone, motDePasse }) {
   };
 }
 
-async function connexion({ email, motDePasse }) {
+async function connexion({ email, motDePasse, remember, resterConnecte } = {}) {
   if (!email || !motDePasse) {
     throw new ApiError(400, 'Email et mot de passe requis');
   }
+  // Case « Rester connecté 30 jours »
+  const keepLoggedIn = Boolean(remember || resterConnecte);
 
   const emailNorm = normalizeEmail(email);
   const etat = getEtatCompte(emailNorm);
@@ -167,19 +169,27 @@ async function connexion({ email, motDePasse }) {
     throw new ApiError(500, 'Erreur de configuration serveur');
   }
 
+  // Session courte par défaut ; 30 jours si « Rester connecté »
+  const expiresIn = keepLoggedIn
+    ? (process.env.JWT_EXPIRES_IN_REMEMBER || '30d')
+    : (process.env.JWT_EXPIRES_IN || '8h');
+
   const token = jwt.sign(
     {
       id: utilisateur.id_utilisateur,
       email: utilisateur.email,
       role: utilisateur.role_libelle,
+      remember: keepLoggedIn,
     },
     secret,
-    { expiresIn: process.env.JWT_EXPIRES_IN || '8h' }
+    { expiresIn }
   );
 
   return {
     message: 'Connexion réussie',
     token,
+    expiresIn,
+    remember: keepLoggedIn,
     utilisateur: await prepareUserForResponse(utilisateur),
   };
 }
