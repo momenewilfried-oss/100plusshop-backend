@@ -190,9 +190,6 @@ async function genererPdfFacture(id) {
     details = lignes;
   }
 
-  const dossierPdf = path.join(__dirname, '../../public/factures');
-  if (!fs.existsSync(dossierPdf)) fs.mkdirSync(dossierPdf, { recursive: true });
-
   const logoCandidates = [
     path.join(__dirname, '../../public/logo_100plus.jpg.jpeg'),
     path.join(__dirname, '../../public/logo_100plus.jpg'),
@@ -202,11 +199,10 @@ async function genererPdfFacture(id) {
   const logoPath = logoCandidates.find((p) => fs.existsSync(p));
 
   const nomFichier = `${facture.numero}.pdf`;
-  const cheminFichier = path.join(dossierPdf, nomFichier);
 
   const doc = new PDFDocument({ margin: 50, size: 'A4' });
-  const stream = fs.createWriteStream(cheminFichier);
-  doc.pipe(stream);
+  const chunks = [];
+  doc.on('data', (chunk) => chunks.push(chunk));
 
   // header
   const headerTop = 45;
@@ -283,14 +279,14 @@ async function genererPdfFacture(id) {
 
   doc.end();
 
-  await new Promise((resolve, reject) => {
-    stream.on('finish', resolve);
-    stream.on('error', reject);
+  const buffer = await new Promise((resolve, reject) => {
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
   });
 
-  const cheminRelatif = `/factures/${nomFichier}`;
-  await pool.query('UPDATE facture SET chemin_pdf = ? WHERE id_facture = ?', [cheminRelatif, id]);
-  return { cheminRelatif, cheminFichier, nomFichier };
+  // On garde une trace du numéro de facture liée au PDF, sans dépendre du disque.
+  await pool.query('UPDATE facture SET chemin_pdf = ? WHERE id_facture = ?', [nomFichier, id]);
+  return { buffer, nomFichier };
 }
 
 module.exports = {

@@ -48,8 +48,11 @@ async function resumeFactures(req, res, next) {
 
 async function genererPdfFacture(req, res, next) {
   try {
-    const { cheminFichier, nomFichier } = await factureService.genererPdfFacture(req.params.id);
-    res.download(cheminFichier, nomFichier);
+    const { buffer, nomFichier } = await factureService.genererPdfFacture(req.params.id);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${nomFichier}"`);
+    res.setHeader('Content-Length', buffer.length);
+    res.send(buffer);
   } catch (erreur) {
     next(erreur);
   }
