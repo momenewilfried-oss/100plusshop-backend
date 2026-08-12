@@ -25,8 +25,29 @@ async function listDepenses({ debut, fin, categorie } = {}) {
   return rows;
 }
 
+/**
+ * Vérifie si un libellé existe déjà (insensible à la casse).
+ * @param {string} libelle
+ * @param {number|null} excludeId - id_depense à ignorer (pour UPDATE)
+ */
+async function existsLibelleIgnoreCase(libelle, excludeId = null) {
+  const nom = String(libelle || '').trim();
+  if (!nom) return false;
+  let sql = `
+    SELECT id_depense FROM depense
+    WHERE LOWER(TRIM(libelle)) = LOWER(TRIM(?))
+  `;
+  const params = [nom];
+  if (excludeId != null) {
+    sql += ' AND id_depense <> ?';
+    params.push(excludeId);
+  }
+  sql += ' LIMIT 1';
+  const [rows] = await pool.query(sql, params);
+  return Array.isArray(rows) && rows.length > 0;
+}
+
 async function createDepense({ libelle, categorie, montant, dateDepense, idUtilisateur }) {
-  // Normaliser la date (datetime-local → timestamp PG)
   let dateVal = dateDepense || null;
   if (dateVal && typeof dateVal === 'string') {
     dateVal = dateVal.trim().replace('T', ' ');
@@ -39,7 +60,6 @@ async function createDepense({ libelle, categorie, montant, dateDepense, idUtili
     [libelle, categorie || 'autre', montant, dateVal, idUtilisateur || null]
   );
 
-  // insertId (wrapper PG) ou row RETURNING
   const id =
     r?.insertId ??
     r?.[0]?.id_depense ??
@@ -82,6 +102,7 @@ async function deleteDepense(id) {
 
 module.exports = {
   listDepenses,
+  existsLibelleIgnoreCase,
   createDepense,
   getDepenseById,
   updateDepense,
