@@ -1,3 +1,4 @@
+
 const { ApiError } = require('../utils/error-handler');
 const venteRepository = require('../repositories/vente.repository');
 const pool = require('../config/database');
@@ -36,33 +37,62 @@ async function obtenirVente(id) {
 
 async function creerVente({ idClient, remiseGlobale, modePaiementPrincipal, lignes }, currentUser) {
   const idVendeur = currentUser.id;
-  if (!lignes || lignes.length === 0) throw new ApiError(400, 'La vente doit contenir au moins une ligne');
+  if (!lignes || lignes.length === 0) {
+    throw new ApiError(400, 'La vente doit contenir au moins une ligne');
+  }
 
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
 
-    // 1. vérifier le stock
+    const ids = lignes.map((l) => Number(l.idVariante));
+
+    // 1) Stock : 1 seule requête pour toutes les variantes
+    const variantes = await venteRepository.getVariantsByIds(connection, ids);
+    const stockMap = {};
+    for (const v of variantes) stockMap[Number(v.id_variante)] = v;
+
     for (const ligne of lignes) {
-      const variante = await venteRepository.getVariantForUpdate(connection, ligne.idVariante);
-      if (!variante) throw new ApiError(409, `Variante ${ligne.idVariante} introuvable`);
-      if (variante.stock < ligne.quantite) {
-        throw new ApiError(409, `Stock insuffisant pour la variante ${ligne.idVariante} (disponible: ${variante.stock}, demandé: ${ligne.quantite})`);
+      const idV = Number(ligne.idVariante);
+      const variante = stockMap[idV];
+      if (!variante) {
+        throw new ApiError(409, `Variante ${idV} introuvable`);
+      }
+      if (Number(variante.stock) < Number(ligne.quantite)) {
+        throw new ApiError(
+          409,
+          `Stock insuffisant pour la variante ${idV} (disponible: ${variante.stock}, demandé: ${ligne.quantite})`
+        );
       }
     }
 
-    // 2. calculs
+    // 2) Promos : 1 seule requête
+    let promoMap = {};
+    try {
+      promoMap = await venteRepository.getPromosForVariants(connection, ids);
+    } catch (_) {
+      promoMap = {};
+    }
+
+    // 3) Calculs en mémoire
     const lignesCalculees = [];
     let montantTotal = 0;
     for (const ligne of lignes) {
-      const promo = await promoActivePourVariante(connection, ligne.idVariante);
-      const remise = calculerRemiseLigne(ligne.prixUnitaire, ligne.quantite, ligne.remise, promo);
-      const sousTotal = Number(ligne.prixUnitaire) * Number(ligne.quantite) - remise;
+      const idV = Number(ligne.idVariante);
+      const promo = promoMap[idV] || null;
+      const remise = calculerRemiseLigne(
+        ligne.prixUnitaire,
+        ligne.quantite,
+        ligne.remise,
+        promo
+      );
+      const sousTotal =
+        Number(ligne.prixUnitaire) * Number(ligne.quantite) - remise;
       montantTotal += sousTotal;
       lignesCalculees.push({
-        idVariante: ligne.idVariante,
-        quantite: ligne.quantite,
-        prixUnitaire: ligne.prixUnitaire,
+        idVariante: idV,
+        quantite: Number(ligne.quantite),
+        prixUnitaire: Number(ligne.prixUnitaire),
         remise,
         sousTotal,
         promoAppliquee: promo ? promo.nom : null,
@@ -72,7 +102,7 @@ async function creerVente({ idClient, remiseGlobale, modePaiementPrincipal, lign
     montantTotal -= Number(remiseGlobale || 0);
     if (montantTotal < 0) montantTotal = 0;
 
-    // 3. créer la vente
+    // 4) INSERT vente
     const idVente = await venteRepository.insertSale(connection, {
       idVendeur,
       idClient,
@@ -81,7 +111,7 @@ async function creerVente({ idClient, remiseGlobale, modePaiementPrincipal, lign
       modePaiementPrincipal,
     });
 
-    // 4. détails + stock + mouvement
+    // 5) Détails + stock + mouvements
     for (const ligne of lignesCalculees) {
       await venteRepository.insertDetail(connection, {
         idVente,
@@ -91,9 +121,11 @@ async function creerVente({ idClient, remiseGlobale, modePaiementPrincipal, lign
         remise: ligne.remise,
         sousTotal: ligne.sousTotal,
       });
-
-      await venteRepository.adjustVariantStock(connection, ligne.idVariante, -Number(ligne.quantite));
-
+      await venteRepository.adjustVariantStock(
+        connection,
+        ligne.idVariante,
+        -Number(ligne.quantite)
+      );
       await venteRepository.insertStockMovement(connection, {
         variante: ligne.idVariante,
         typeMouvement: 'sortie',
@@ -104,39 +136,94 @@ async function creerVente({ idClient, remiseGlobale, modePaiementPrincipal, lign
       });
     }
 
-    await connection.commit();
-    await logAction({
-      userId: idVendeur || null,
-      module: 'vente',
-      action: 'CREATE',
-      newValue: { idVente: typeof idVente !== 'undefined' ? idVente : null },
-    });
-
-    const venteFinale = await venteRepository.getSaleFinal(pool, idVente);
-    const detailsFinaux = await venteRepository.getSaleDetailsFinal(pool, idVente);
-
-    // Facture générée automatiquement côté serveur (plus fiable que le seul front)
-    let facture = null;
+    // 6) Facture dans la MÊME transaction (évite 2e connexion + latence)
+    const numero =
+      'FACT-' +
+      new Date().toISOString().slice(0, 10).replace(/-/g, '') +
+      '-' +
+      String(Math.floor(1000 + Math.random() * 9000));
+    let factureRow = null;
     try {
-      const factureService = require('./facture.service');
-      facture = await factureService.creerFactureDepuisVente({
-        idVente: Number(idVente),
-        statut: 'Payée',
-      }, currentUser);
+      const [exist] = await connection.query(
+        'SELECT * FROM facture WHERE id_vente = ? LIMIT 1',
+        [idVente]
+      );
+      if (exist && exist.length) {
+        factureRow = exist[0];
+      } else {
+        const [ins] = await connection.query(
+          `INSERT INTO facture (numero, date_facture, id_vente, montant_total, statut)
+           VALUES (?, NOW(), ?, ?, ?)`,
+          [numero, idVente, montantTotal, 'Payée']
+        );
+        const idFacture = Number(
+          ins.insertId ?? ins[0]?.id_facture ?? ins.rows?.[0]?.id_facture
+        );
+        if (idFacture) {
+          factureRow = {
+            id_facture: idFacture,
+            numero,
+            id_vente: idVente,
+            montant_total: montantTotal,
+            statut: 'Payée',
+          };
+        } else {
+          const [byNum] = await connection.query(
+            'SELECT * FROM facture WHERE numero = ? LIMIT 1',
+            [numero]
+          );
+          factureRow = byNum[0] || null;
+        }
+      }
     } catch (e) {
-      console.error('[vente] génération auto facture échouée:', e.message);
+      console.error('[vente] facture dans TX:', e.message);
+      // ne fait pas échouer la vente
     }
 
+    await connection.commit();
+
+    // Audit non bloquant (ne retarde pas la réponse POS)
+    Promise.resolve(
+      logAction({
+        userId: idVendeur || null,
+        module: 'vente',
+        action: 'CREATE',
+        newValue: {
+          idVente,
+          montant_total: montantTotal,
+          id_facture: factureRow?.id_facture || null,
+        },
+      })
+    ).catch(() => {});
+
     return {
-      ...venteFinale,
-      details: detailsFinaux,
-      facture,
+      id_vente: idVente,
+      montant_total: montantTotal,
+      remise_globale: Number(remiseGlobale || 0),
+      mode_paiement_principal: modePaiementPrincipal,
+      id_client: idClient || null,
+      id_vendeur: idVendeur,
+      statut: 'validee',
+      details: lignesCalculees.map((l) => ({
+        id_variante: l.idVariante,
+        quantite: l.quantite,
+        prix_unitaire: l.prixUnitaire,
+        remise: l.remise,
+        sous_total: l.sousTotal,
+      })),
+      facture: factureRow,
       promos: lignesCalculees
         .filter((l) => l.promoAppliquee)
-        .map((l) => ({ idVariante: l.idVariante, promo: l.promoAppliquee, remise: l.remise })),
+        .map((l) => ({
+          idVariante: l.idVariante,
+          promo: l.promoAppliquee,
+          remise: l.remise,
+        })),
     };
   } catch (erreur) {
-    await connection.rollback();
+    try {
+      await connection.rollback();
+    } catch (_) {}
     throw erreur;
   } finally {
     connection.release();
