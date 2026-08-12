@@ -1,3 +1,4 @@
+
 const { ApiError } = require('../utils/error-handler');
 const pool = require('../config/database');
 
@@ -98,6 +99,24 @@ async function createAchat({ idFournisseur, lignes } = {}) {
         throw new ApiError(404, `Variante ${l.idVariante} introuvable`);
       }
       montantTotal += Number(l.quantite) * Number(l.prixUnitaire);
+    }
+
+    // Règle métier : le montant de l'achat ne peut pas dépasser le CA (ventes validées)
+    const [caRows] = await db.query(
+      `SELECT COALESCE(SUM(montant_total), 0) AS ca
+       FROM vente
+       WHERE statut = 'validee'`
+    );
+    const chiffreAffaires = Number(
+      (Array.isArray(caRows) && caRows[0] && caRows[0].ca) != null
+        ? caRows[0].ca
+        : 0
+    );
+    if (montantTotal > chiffreAffaires) {
+      throw new ApiError(
+        400,
+        `Achat impossible : montant ${montantTotal} FCFA supérieur au chiffre d'affaires (${chiffreAffaires} FCFA).`
+      );
     }
 
     const numero = genererNumeroAchat();
