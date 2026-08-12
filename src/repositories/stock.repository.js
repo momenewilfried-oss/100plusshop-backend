@@ -113,7 +113,7 @@ async function alertesStock() {
 
 async function getVarianteForUpdate(db, idVariante) {
   const [rows] = await db.query(
-    'SELECT stock FROM variante WHERE id_variante = ? FOR UPDATE',
+    'SELECT stock FROM variante WHERE id_variante = ?',
     [idVariante]
   );
   return rows[0] || null;
