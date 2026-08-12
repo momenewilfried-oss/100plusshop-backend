@@ -1,3 +1,4 @@
+
 const { ApiError } = require('../utils/error-handler');
 const venteRepository = require('../repositories/vente.repository');
 const pool = require('../config/database');
@@ -148,7 +149,7 @@ async function annulerVente(id) {
   try {
     await connection.beginTransaction();
 
-    const vente = await connection.query('SELECT statut FROM vente WHERE id_vente = ? FOR UPDATE', [id]);
+    const vente = await connection.query('SELECT statut FROM vente WHERE id_vente = ?', [id]);
     const venteRows = vente[0];
     if (venteRows.length === 0) throw new ApiError(409, 'Vente introuvable');
     if (venteRows[0].statut === 'annulee') throw new ApiError(409, 'Cette vente est déjà annulée');
