@@ -26,12 +26,30 @@ async function listDepenses({ debut, fin, categorie } = {}) {
 }
 
 async function createDepense({ libelle, categorie, montant, dateDepense, idUtilisateur }) {
+  // Normaliser la date (datetime-local → timestamp PG)
+  let dateVal = dateDepense || null;
+  if (dateVal && typeof dateVal === 'string') {
+    dateVal = dateVal.trim().replace('T', ' ');
+    if (!dateVal) dateVal = null;
+  }
+
   const [r] = await pool.query(
     `INSERT INTO depense (libelle, categorie, montant, date_depense, id_enregistre_par)
      VALUES (?, ?, ?, COALESCE(?, NOW()), ?)`,
-    [libelle, categorie || 'autre', montant, dateDepense || null, idUtilisateur || null]
+    [libelle, categorie || 'autre', montant, dateVal, idUtilisateur || null]
   );
-  return r.insertId;
+
+  // insertId (wrapper PG) ou row RETURNING
+  const id =
+    r?.insertId ??
+    r?.[0]?.id_depense ??
+    r?.rows?.[0]?.id_depense ??
+    null;
+
+  if (id == null || Number(id) <= 0) {
+    throw new Error('INSERT depense: id_depense non retourné');
+  }
+  return Number(id);
 }
 
 async function getDepenseById(id) {
@@ -40,6 +58,11 @@ async function getDepenseById(id) {
 }
 
 async function updateDepense(id, { libelle, categorie, montant, dateDepense }) {
+  let dateVal = dateDepense;
+  if (dateVal && typeof dateVal === 'string') {
+    dateVal = dateVal.trim().replace('T', ' ');
+    if (!dateVal) dateVal = null;
+  }
   const [r] = await pool.query(
     `UPDATE depense SET
        libelle = COALESCE(?, libelle),
@@ -47,7 +70,7 @@ async function updateDepense(id, { libelle, categorie, montant, dateDepense }) {
        montant = COALESCE(?, montant),
        date_depense = COALESCE(?, date_depense)
      WHERE id_depense = ?`,
-    [libelle, categorie, montant, dateDepense, id]
+    [libelle, categorie, montant, dateVal, id]
   );
   return r.affectedRows;
 }
