@@ -249,133 +249,122 @@ async function genererPdfFacture(id) {
     details = lignes || [];
   }
 
-  const logoCandidates = [
-    path.join(__dirname, '../../public/logo_100plus.jpg.jpeg'),
-    path.join(__dirname, '../../public/logo_100plus.jpg'),
-    path.join(__dirname, '../../public/logo.png'),
-    path.join(__dirname, '../../public/logo.jpg'),
-  ];
-  const logoPath = logoCandidates.find((p) => {
-    try {
-      return fs.existsSync(p);
-    } catch (_) {
-      return false;
-    }
+  // Format ticket caisse ~80 mm de large (226 pt)
+  const TICKET_W = 226;
+  const marginX = 12;
+  const contentW = TICKET_W - marginX * 2;
+  // Hauteur dynamique selon le nombre de lignes
+  const baseH = 220;
+  const lineH = 28;
+  const TICKET_H = Math.max(400, baseH + details.length * lineH + 80);
+
+  const nomFichier = `${String(facture.numero || 'ticket').replace(/[^\w.-]+/g, '_')}.pdf`;
+
+  const doc = new PDFDocument({
+    size: [TICKET_W, TICKET_H],
+    margin: marginX,
   });
-
-  const nomFichier = `${String(facture.numero || 'facture').replace(/[^\w.-]+/g, '_')}.pdf`;
-
-  const doc = new PDFDocument({ margin: 50, size: 'A4' });
   const chunks = [];
   doc.on('data', (c) => chunks.push(c));
-
   const pdfDone = new Promise((resolve, reject) => {
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
   });
 
-  // header
-  const headerTop = 45;
-  if (logoPath) {
-    try {
-      doc.image(logoPath, 50, headerTop, { width: 70, height: 70, fit: [70, 70] });
-    } catch (_) {}
-  }
-  const textLeft = logoPath ? 130 : 50;
-  doc
-    .fontSize(20)
-    .fillColor('#FF2D7B')
-    .text('100PLUSSHOP', textLeft, headerTop + 8, { continued: false });
-  doc.fontSize(10).fillColor('#666666').text('Gestion boutique mode', textLeft, headerTop + 32);
-  doc
-    .fontSize(16)
-    .fillColor('#000000')
-    .text('FACTURE', 350, headerTop + 8, { width: 195, align: 'right' });
-  doc
-    .fontSize(11)
-    .fillColor('#333333')
-    .text(String(facture.numero || ''), 350, headerTop + 30, { width: 195, align: 'right' });
+  const center = (text, opts = {}) => {
+    doc.text(text, marginX, doc.y, {
+      width: contentW,
+      align: 'center',
+      ...opts,
+    });
+  };
 
-  doc.y = Math.max(doc.y, headerTop + 80);
+  const line = (ch = '-') => {
+    doc
+      .fontSize(9)
+      .fillColor('#333333')
+      .text(ch.repeat(32), marginX, doc.y, { width: contentW, align: 'center' });
+  };
+
+  // ——— En-tête boutique ———
+  doc.fontSize(14).fillColor('#000000');
+  center('100PLUSSHOP');
+  doc.moveDown(0.15);
+  doc.fontSize(8).fillColor('#444444');
+  center('Ticket de caisse');
   doc.moveDown(0.3);
-  doc.moveTo(50, doc.y).lineTo(545, doc.y).strokeColor('#FF2D7B').lineWidth(1.5).stroke();
-  doc.moveDown();
+  line('=');
 
   const dateFacture = facture.date_facture
-    ? new Date(facture.date_facture).toLocaleDateString('fr-FR')
+    ? new Date(facture.date_facture).toLocaleString('fr-FR')
     : '-';
-  doc.fontSize(11).fillColor('#000000');
-  doc.text(`Date : ${dateFacture}`);
-  doc.text(`Statut : ${facture.statut || '-'}`);
-  doc.text(`Paiement : ${facture.mode_paiement_principal || '-'}`);
-  doc.moveDown();
-
-  doc.fontSize(12).fillColor('#FF2D7B').text('Client');
-  doc.fontSize(11).fillColor('#000000');
-  if (facture.client_nom) {
-    doc.text(`${facture.client_prenom || ''} ${facture.client_nom}`.trim());
-    if (facture.client_email) doc.text(facture.client_email);
-    if (facture.client_telephone) doc.text(String(facture.client_telephone));
-  } else {
-    doc.text('Client anonyme');
-  }
-  doc.moveDown();
-
-  doc.fontSize(12).fillColor('#FF2D7B').text('Détail des articles');
-  doc.moveDown(0.5);
-
-  const y0 = doc.y;
-  doc.rect(50, y0, 495, 20).fill('#FF2D7B');
-  doc
-    .fillColor('#FFFFFF')
-    .fontSize(9)
-    .text('Article', 55, y0 + 5, { width: 175 })
-    .text('Qté', 235, y0 + 5, { width: 35 })
-    .text('P.U.', 275, y0 + 5, { width: 80 })
-    .text('Remise', 360, y0 + 5, { width: 70 })
-    .text('Total', 440, y0 + 5, { width: 95 });
-
-  let y = y0 + 22;
-  details.forEach((ligne, i) => {
-    const bg = i % 2 === 0 ? '#F9F9F9' : '#FFFFFF';
-    doc.rect(50, y, 495, 20).fill(bg);
-    const nom = `${ligne.produit_nom || ''} ${ligne.taille || ''} ${ligne.couleur || ''}`.trim();
-    doc
-      .fillColor('#000000')
-      .fontSize(8)
-      .text(nom.substring(0, 34), 55, y + 5, { width: 175 })
-      .text(String(ligne.quantite), 235, y + 5, { width: 35 })
-      .text(formatFcfa(ligne.prix_unitaire), 275, y + 5, { width: 80 })
-      .text(formatFcfa(ligne.remise || 0), 360, y + 5, { width: 70 })
-      .text(formatFcfa(ligne.sous_total), 440, y + 5, { width: 95 });
-    y += 20;
+  doc.fontSize(8).fillColor('#000000');
+  doc.text(`N° ${facture.numero || '-'}`, marginX, doc.y, { width: contentW });
+  doc.text(`Date ${dateFacture}`, marginX, doc.y, { width: contentW });
+  doc.text(`Paiement : ${facture.mode_paiement_principal || '-'}`, marginX, doc.y, {
+    width: contentW,
   });
+  if (facture.client_nom) {
+    doc.text(
+      `Client : ${`${facture.client_prenom || ''} ${facture.client_nom}`.trim()}`,
+      marginX,
+      doc.y,
+      { width: contentW }
+    );
+  } else {
+    doc.text('Client : Anonyme', marginX, doc.y, { width: contentW });
+  }
+  doc.moveDown(0.2);
+  line('-');
 
-  doc.y = y + 16;
+  // ——— Articles ———
+  doc.fontSize(8).fillColor('#000000');
+  for (const l of details) {
+    const nom = `${l.produit_nom || 'Article'}`.trim();
+    const varTxt = [l.taille, l.couleur].filter(Boolean).join(' ');
+    const titre = varTxt ? `${nom} (${varTxt})` : nom;
+    doc.text(titre.substring(0, 36), marginX, doc.y, { width: contentW });
+    const qte = Number(l.quantite) || 0;
+    const pu = formatFcfa(l.prix_unitaire);
+    const st = formatFcfa(l.sous_total);
+    doc.text(`${qte} x ${pu}`, marginX, doc.y, { width: contentW * 0.55, continued: true });
+    doc.text(st, { width: contentW * 0.45, align: 'right' });
+    if (Number(l.remise) > 0) {
+      doc.fillColor('#666666').text(`  remise -${formatFcfa(l.remise)}`, marginX, doc.y, {
+        width: contentW,
+      });
+      doc.fillColor('#000000');
+    }
+    doc.moveDown(0.15);
+  }
+
+  line('-');
   const remiseGlobale = Number(facture.remise_globale || 0);
   const total = Number(facture.montant_total || 0);
-  doc.fontSize(11).fillColor('#000000');
   if (remiseGlobale > 0) {
-    doc.text(`Remise globale : -${formatFcfa(remiseGlobale)}`, { align: 'right' });
+    doc.fontSize(8);
+    doc.text(`Remise globale`, marginX, doc.y, { width: contentW * 0.55, continued: true });
+    doc.text(`-${formatFcfa(remiseGlobale)}`, { width: contentW * 0.45, align: 'right' });
   }
-  doc
-    .fontSize(14)
-    .fillColor('#FF2D7B')
-    .text(`Total TTC : ${formatFcfa(total)}`, { align: 'right' });
-
-  doc.moveDown(2);
-  doc
-    .fontSize(9)
-    .fillColor('#888888')
-    .text('Merci pour votre confiance — 100PLUSSHOP', { align: 'center' });
+  doc.moveDown(0.15);
+  doc.fontSize(11).fillColor('#000000');
+  doc.text('TOTAL', marginX, doc.y, { width: contentW * 0.45, continued: true });
+  doc.text(formatFcfa(total), { width: contentW * 0.55, align: 'right' });
+  doc.moveDown(0.35);
+  line('=');
+  doc.fontSize(8).fillColor('#333333');
+  center('Merci de votre visite !');
+  center('100PLUSSHOP');
+  doc.moveDown(0.2);
+  doc.fontSize(7).fillColor('#888888');
+  center(String(facture.statut || ''));
 
   doc.end();
   const buffer = await pdfDone;
 
-  // chemin_pdf optionnel (peut échouer en lecture seule — non bloquant)
   try {
     await pool.query('UPDATE facture SET chemin_pdf = ? WHERE id_facture = ?', [
-      `memory://${nomFichier}`,
+      `ticket://${nomFichier}`,
       id,
     ]);
   } catch (_) {}
