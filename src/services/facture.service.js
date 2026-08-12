@@ -71,53 +71,100 @@ async function obtenirFacture(id) {
 
 async function creerFactureDepuisVente({ idVente, statut }, user = null) {
   if (!idVente) throw new ApiError(400, 'idVente obligatoire');
-  const db = await pool.getConnection();
+
+  // 1) Vente (sans FOR UPDATE : compatible pooler Supabase transaction mode)
+  const [ventes] = await pool.query('SELECT * FROM vente WHERE id_vente = ?', [idVente]);
+  if (!ventes || ventes.length === 0) {
+    throw new ApiError(404, 'Vente introuvable');
+  }
+  const vente = ventes[0];
+  if (String(vente.statut).toLowerCase() === 'annulee') {
+    throw new ApiError(409, 'Impossible de facturer une vente annulée');
+  }
+
+  // 2) Idempotent : facture déjà liée à cette vente
+  const [existantes] = await pool.query(
+    'SELECT * FROM facture WHERE id_vente = ? ORDER BY id_facture DESC LIMIT 1',
+    [idVente]
+  );
+  if (existantes && existantes.length > 0) {
+    return existantes[0];
+  }
+
+  const numero = genererNumero();
+  const montant = Number(vente.montant_total) || 0;
+  const st = statut || 'Payée';
+
+  // 3) INSERT avec RETURNING explicite (PostgreSQL)
+  let idFacture = null;
+  let row = null;
   try {
-    await db.beginTransaction();
-    const [ventes] = await db.query('SELECT * FROM vente WHERE id_vente = ? FOR UPDATE', [idVente]);
-    if (ventes.length === 0) throw new ApiError(409, 'Vente introuvable');
-    const vente = ventes[0];
-    if (vente.statut === 'annulee') throw new ApiError(409, 'Impossible de facturer une vente annulée');
-    // Idempotent : si une facture existe déjà pour cette vente, on la renvoie
-    const [existantes] = await db.query('SELECT * FROM facture WHERE id_vente = ?', [idVente]);
-    if (existantes.length > 0) {
-      await db.commit();
-      return existantes[0];
-    }
-    const numero = genererNumero();
-    const [result] = await db.query(
+    const [result] = await pool.query(
       `INSERT INTO facture (numero, date_facture, id_vente, montant_total, statut)
        VALUES (?, NOW(), ?, ?, ?)`,
-      [numero, idVente, vente.montant_total, statut || 'Payée']
+      [numero, idVente, montant, st]
     );
-    const idFacture = Number(
-      result.insertId ?? result[0]?.id_facture ?? result.rows?.[0]?.id_facture
-    );
-    if (!idFacture) {
-      throw new ApiError(500, 'INSERT facture: id_facture non retourné');
+    // result peut être tableau de rows + insertId (wrapper mysql-compatible)
+    if (Array.isArray(result) && result[0] && result[0].id_facture != null) {
+      row = result[0];
+      idFacture = Number(result[0].id_facture);
+    } else if (result && result.insertId) {
+      idFacture = Number(result.insertId);
+    } else if (result && result[0]) {
+      row = result[0];
+      idFacture = Number(result[0].id_facture);
     }
-    await db.commit();
-    const [facture] = await pool.query('SELECT * FROM facture WHERE id_facture = ?', [idFacture]);
-    const row = facture[0];
+  } catch (e) {
+    // Course : une autre requête a créé la facture entre-temps (UNIQUE id_vente)
+    const msg = String(e.message || e);
+    if (/unique|duplicate|id_vente/i.test(msg)) {
+      const [again] = await pool.query(
+        'SELECT * FROM facture WHERE id_vente = ? ORDER BY id_facture DESC LIMIT 1',
+        [idVente]
+      );
+      if (again && again.length) return again[0];
+    }
+    throw e;
+  }
+
+  // 4) Fallback : recharger par numéro si id manquant
+  if (!row) {
+    const [byNum] = await pool.query('SELECT * FROM facture WHERE numero = ?', [numero]);
+    if (byNum && byNum.length) {
+      row = byNum[0];
+      idFacture = Number(row.id_facture);
+    }
+  }
+  if (!row && idFacture) {
+    const [byId] = await pool.query('SELECT * FROM facture WHERE id_facture = ?', [idFacture]);
+    row = byId[0] || null;
+  }
+
+  if (!row) {
+    // Dernier recours : par id_vente
+    const [byV] = await pool.query('SELECT * FROM facture WHERE id_vente = ? LIMIT 1', [idVente]);
+    if (byV && byV.length) return byV[0];
+    throw new ApiError(500, 'INSERT facture: enregistrement non retrouvé après insertion');
+  }
+
+  try {
     await logAction({
       userId: user?.id || null,
       module: 'facture',
       action: 'CREATE',
       newValue: {
-        id_facture: idFacture,
-        id_vente: idVente,
-        numero: row?.numero,
-        montant_total: row?.montant_total,
-        statut: row?.statut,
+        id_facture: Number(row.id_facture),
+        id_vente: Number(idVente),
+        numero: row.numero,
+        montant_total: row.montant_total,
+        statut: row.statut,
       },
     });
-    return row;
-  } catch (e) {
-    await db.rollback();
-    throw e;
-  } finally {
-    db.release();
+  } catch (_) {
+    /* audit non bloquant */
   }
+
+  return row;
 }
 
 async function modifierStatutFacture(id, statut, user = null) {
@@ -140,21 +187,11 @@ async function modifierStatutFacture(id, statut, user = null) {
 
 async function resumeFactures() {
   const [total] = await pool.query('SELECT COUNT(*) AS total FROM facture');
-  // Factures payées du mois (documents)
   const [payees] = await pool.query(`
-    SELECT COALESCE(SUM(montant_total), 0) AS total
-    FROM facture
-    WHERE statut = 'Payée'
+    SELECT COALESCE(SUM(montant_total), 0) AS recettes
+    FROM facture WHERE statut = 'Payée'
       AND date_facture >= date_trunc('month', CURRENT_DATE)
       AND date_facture < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'
-  `);
-  // Même règle que le rapport : CA = ventes validées du mois
-  const [caVentes] = await pool.query(`
-    SELECT COALESCE(SUM(montant_total), 0) AS total
-    FROM vente
-    WHERE statut = 'validee'
-      AND date_vente >= date_trunc('month', CURRENT_DATE)
-      AND date_vente < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'
   `);
   const [enAttente] = await pool.query(`
     SELECT COALESCE(SUM(montant_total), 0) AS montant
@@ -164,15 +201,9 @@ async function resumeFactures() {
     SELECT COALESCE(SUM(montant_total), 0) AS montant
     FROM facture WHERE statut = 'Retard'
   `);
-  const facturesPayeesMois = Number(payees[0].total);
-  const caVentesMois = Number(caVentes[0].total);
   return {
     total_factures: Number(total[0].total),
-    // Ancien champ conservé pour compat front : = CA ventes (règle unique)
-    recettes_payees_mois: caVentesMois,
-    ca_ventes_mois: caVentesMois,
-    factures_payees_mois: facturesPayeesMois,
-    ecart_factures_vs_ventes: facturesPayeesMois - caVentesMois,
+    recettes_payees_mois: Number(payees[0].recettes),
     en_attente: Number(enAttente[0].montant),
     retards: Number(retards[0].montant),
   };
