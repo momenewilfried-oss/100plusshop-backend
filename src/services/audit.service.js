@@ -1,3 +1,4 @@
+
 const pool = require('../config/database');
 const logger = require('../helpers/logger');
 
@@ -34,15 +35,23 @@ async function logAction({
   newValue = null,
 } = {}) {
   try {
-    // JSONB : passer l'objet ; le driver pg sérialise. String OK aussi.
-    const oldV = oldValue == null ? null : typeof oldValue === 'string' ? oldValue : JSON.stringify(oldValue);
-    const newV = newValue == null ? null : typeof newValue === 'string' ? newValue : JSON.stringify(newValue);
+    // JSONB : laisser le driver pg sérialiser les objets (évite le double-escape)
+    const oldV = oldValue == null ? null : oldValue;
+    const newV = newValue == null ? null : newValue;
 
     await pool.query(
       `INSERT INTO audit_logs
         (user_id, module_name, action, old_value, new_value, ip, user_agent, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [userId, module, action, oldV, newV, ip, userAgent]
+       VALUES (?, ?, ?, ?::jsonb, ?::jsonb, ?, ?, NOW())`,
+      [
+        userId,
+        module,
+        action,
+        oldV == null ? null : (typeof oldV === 'string' ? oldV : JSON.stringify(oldV)),
+        newV == null ? null : (typeof newV === 'string' ? newV : JSON.stringify(newV)),
+        ip,
+        userAgent,
+      ]
     );
   } catch (e) {
     logger.warn('audit.service.logAction: écriture échouée');
