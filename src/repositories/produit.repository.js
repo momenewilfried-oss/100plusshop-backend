@@ -1,203 +1,138 @@
 const pool = require('../config/database');
 
-async function listSales() {
+async function listProducts() {
+  try {
+    const [rows] = await pool.query(`
+      SELECT p.*, c.nom AS categorie_nom, m.nom AS marque_nom,
+             COALESCE(SUM(v.stock), 0) AS stock_total
+      FROM produit p
+      LEFT JOIN categorie c ON p.id_categorie = c.id_categorie
+      LEFT JOIN marque m ON p.id_marque = m.id_marque
+      LEFT JOIN variante v ON v.id_produit = p.id_produit
+      WHERE p.deleted_at IS NULL
+      GROUP BY p.id_produit, c.nom, m.nom
+      ORDER BY p.id_produit DESC
+    `);
+    return rows;
+  } catch (e) {
+    // colonne deleted_at absente
+    const [rows] = await pool.query(`
+      SELECT p.*, c.nom AS categorie_nom, m.nom AS marque_nom,
+             COALESCE(SUM(v.stock), 0) AS stock_total
+      FROM produit p
+      LEFT JOIN categorie c ON p.id_categorie = c.id_categorie
+      LEFT JOIN marque m ON p.id_marque = m.id_marque
+      LEFT JOIN variante v ON v.id_produit = p.id_produit
+      GROUP BY p.id_produit, c.nom, m.nom
+      ORDER BY p.id_produit DESC
+    `);
+    return rows;
+  }
+}
+
+async function getProductById(id) {
+  try {
+    const [rows] = await pool.query(
+      'SELECT * FROM produit WHERE id_produit = ? AND deleted_at IS NULL',
+      [id]
+    );
+    return rows[0] || null;
+  } catch {
+    const [rows] = await pool.query('SELECT * FROM produit WHERE id_produit = ?', [id]);
+    return rows[0] || null;
+  }
+}
+
+async function getVariantsByProductId(productId) {
+  const [rows] = await pool.query('SELECT * FROM variante WHERE id_produit = ?', [productId]);
+  return rows;
+}
+
+async function createProduct({ reference, nom, description, idMarque, idCategorie, matiere, genre, saison, prixAchat, prixVente, seuilAlerte, photo, idFournisseur }, connection) {
+  const [result] = await connection.query(
+    `INSERT INTO produit 
+     (reference, nom, description, id_marque, id_categorie, matiere, genre, 
+      saison, prix_achat, prix_vente, seuil_alerte, photo, id_fournisseur)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [reference, nom, description, idMarque, idCategorie, matiere, genre,
+     saison, prixAchat, prixVente, seuilAlerte || 5, photo, idFournisseur]
+  );
+  return result.insertId;
+}
+
+async function createVariant({ productId, taille, couleur, stock, prixAchat, prixVente, seuilAlerte }, connection) {
+  const [result] = await connection.query(
+    `INSERT INTO variante
+     (id_produit, taille, couleur, stock, prix_achat, prix_vente, seuil_alerte)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [productId, taille, couleur, stock, prixAchat, prixVente, seuilAlerte]
+  );
+  return result.insertId;
+}
+
+async function updateProduct({ id, nom, description, prixAchat, prixVente, seuilAlerte, photo }) {
+  await pool.query(
+    `UPDATE produit 
+     SET nom = COALESCE(?, nom), description = COALESCE(?, description),
+         prix_achat = COALESCE(?, prix_achat), prix_vente = COALESCE(?, prix_vente),
+         seuil_alerte = COALESCE(?, seuil_alerte), photo = COALESCE(?, photo)
+     WHERE id_produit = ?`,
+    [nom, description, prixAchat, prixVente, seuilAlerte, photo, id]
+  );
+}
+
+async function deleteProduct(id) {
+  try {
+    const [result] = await pool.query(
+      'UPDATE produit SET deleted_at = NOW() WHERE id_produit = ? AND deleted_at IS NULL',
+      [id]
+    );
+    if (result.affectedRows > 0) return result.affectedRows;
+  } catch { /* fallback hard delete */ }
+  const [result] = await pool.query('DELETE FROM produit WHERE id_produit = ?', [id]);
+  return result.affectedRows;
+}
+
+async function getLowStockProducts() {
   const [rows] = await pool.query(`
-    SELECT v.*,
-           u.nom AS vendeur_nom, u.prenom AS vendeur_prenom,
-           c.nom AS client_nom, c.prenom AS client_prenom,
-           (
-             SELECT STRING_AGG(sub.ligne, ', ' ORDER BY sub.id_detail)
-             FROM (
-               SELECT dv.id_detail,
-                      (p.nom || ' ×' || dv.quantite::text) AS ligne
-               FROM detail_vente dv
-               JOIN variante var ON dv.id_variante = var.id_variante
-               JOIN produit p ON var.id_produit = p.id_produit
-               WHERE dv.id_vente = v.id_vente
-             ) sub
-           ) AS articles_resume
-    FROM vente v
-    LEFT JOIN utilisateur u ON v.id_vendeur = u.id_utilisateur
-    LEFT JOIN client c ON v.id_client = c.id_client
-    ORDER BY v.date_vente DESC
+    SELECT p.id_produit, p.nom, p.reference, v.id_variante, v.taille,
+           v.couleur, v.stock, v.seuil_alerte
+    FROM variante v
+    JOIN produit p ON v.id_produit = p.id_produit
+    WHERE v.stock <= v.seuil_alerte
+    ORDER BY v.stock ASC
   `);
   return rows;
 }
 
-async function getSaleById(id) {
-  const [rows] = await pool.query(
-    `SELECT v.*,
-            u.nom AS vendeur_nom, u.prenom AS vendeur_prenom,
-            c.nom AS client_nom, c.prenom AS client_prenom
-     FROM vente v
-     LEFT JOIN utilisateur u ON v.id_vendeur = u.id_utilisateur
-     LEFT JOIN client c ON v.id_client = c.id_client
-     WHERE v.id_vente = ?`,
-    [id]
-  );
-  return rows[0] || null;
-}
-
-async function getSaleDetails(id) {
-  const [rows] = await pool.query(
-    `SELECT dv.*, var.taille, var.couleur, p.nom AS produit_nom, p.reference
-     FROM detail_vente dv
-     JOIN variante var ON dv.id_variante = var.id_variante
-     JOIN produit p ON var.id_produit = p.id_produit
-     WHERE dv.id_vente = ?`,
-    [id]
-  );
-  return rows;
-}
-
-async function getVariantForUpdate(db, idVariante) {
-  const [rows] = await db.query(
-    'SELECT stock FROM variante WHERE id_variante = ? FOR UPDATE',
-    [idVariante]
-  );
-  return rows[0] || null;
-}
-
-async function getPromoForVariant(db, idVariante) {
-  const [rows] = await db.query(
-    `SELECT p.type, p.valeur, p.nom
-     FROM promotion p
-     JOIN variante_promotion vp ON vp.id_promotion = p.id_promotion
-     WHERE vp.id_variante = ?
-       AND p.statut = 'active'
-       AND p.date_debut <= NOW()
-       AND p.date_fin >= NOW()
-     ORDER BY p.valeur DESC
-     LIMIT 1`,
-    [idVariante]
-  );
-  return rows[0] || null;
-}
-
-async function insertSale(
-  db,
-  { idVendeur, idClient, remiseGlobale, montantTotal, modePaiementPrincipal }
-) {
-  const [result] = await db.query(
-    `INSERT INTO vente
-     (date_vente, id_vendeur, id_client, remise_globale, montant_total, mode_paiement_principal, statut)
-     VALUES (NOW(), ?, ?, ?, ?, ?, 'validee')`,
-    [
-      idVendeur,
-      idClient || null,
-      remiseGlobale || 0,
-      montantTotal,
-      modePaiementPrincipal,
-    ]
-  );
-
-  // Toujours privilégier id_vente (jamais un éventuel id_client pris par erreur)
-  const id =
-    result[0]?.id_vente ??
-    result.rows?.[0]?.id_vente ??
-    result.insertId;
-
-  if (id == null || Number(id) <= 0) {
-    throw new Error('INSERT vente: id_vente non retourné');
+async function listDeletedProducts() {
+  try {
+    const [rows] = await pool.query(
+      `SELECT * FROM produit WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC`
+    );
+    return rows;
+  } catch {
+    return [];
   }
-  return Number(id);
 }
 
-async function insertDetail(
-  db,
-  { idVente, idVariante, quantite, prixUnitaire, remise, sousTotal }
-) {
-  await db.query(
-    `INSERT INTO detail_vente
-     (id_vente, id_variante, quantite, prix_unitaire, remise, sous_total)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [idVente, idVariante, quantite, prixUnitaire, remise, sousTotal]
-  );
-}
-
-async function adjustVariantStock(db, idVariante, delta) {
-  await db.query(
-    'UPDATE variante SET stock = stock + ? WHERE id_variante = ?',
-    [delta, idVariante]
-  );
-}
-
-async function insertStockMovement(
-  db,
-  { variante, typeMouvement, quantite, motif, documentType, documentId }
-) {
-  await db.query(
-    `INSERT INTO mouvement_stock
-     (variante, typeMouvement, quantite, motif, documentType, documentId)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [variante, typeMouvement, quantite, motif, documentType, documentId]
-  );
-}
-
-
-async function getVariantsByIds(db, ids) {
-  if (!ids || ids.length === 0) return [];
-  const placeholders = ids.map(() => '?').join(',');
-  const [rows] = await db.query(
-    `SELECT id_variante, stock, id_produit, taille, couleur
-     FROM variante
-     WHERE id_variante IN (${placeholders})
-     FOR UPDATE`,
-    ids
-  );
-  return rows || [];
-}
-
-async function getPromosForVariants(db, ids) {
-  if (!ids || ids.length === 0) return {};
-  const unique = [...new Set(ids.map(Number))];
-  const placeholders = unique.map(() => '?').join(',');
-  const [rows] = await db.query(
-    `SELECT vp.id_variante, p.type, p.valeur, p.nom
-     FROM promotion p
-     JOIN variante_promotion vp ON vp.id_promotion = p.id_promotion
-     WHERE vp.id_variante IN (${placeholders})
-       AND p.statut = 'active'
-       AND p.date_debut <= NOW()
-       AND p.date_fin >= NOW()
-     ORDER BY p.valeur DESC`,
-    unique
-  );
-  const map = {};
-  for (const r of rows || []) {
-    const k = Number(r.id_variante);
-    if (map[k] == null) map[k] = r; // première = meilleure valeur (ORDER BY DESC)
-  }
-  return map;
-}
-
-async function getSaleFinal(poolRef, id) {
-  const db = poolRef || pool;
-  const [rows] = await db.query('SELECT * FROM vente WHERE id_vente = ?', [id]);
-  return rows[0] || null;
-}
-
-async function getSaleDetailsFinal(poolRef, id) {
-  const db = poolRef || pool;
-  const [rows] = await db.query(
-    'SELECT * FROM detail_vente WHERE id_vente = ?',
+async function restoreProduct(id) {
+  const [result] = await pool.query(
+    'UPDATE produit SET deleted_at = NULL WHERE id_produit = ?',
     [id]
   );
-  return rows;
+  return result.affectedRows;
 }
 
 module.exports = {
-  getVariantsByIds,
-  getPromosForVariants,
-  listSales,
-  getSaleById,
-  getSaleDetails,
-  getVariantForUpdate,
-  getPromoForVariant,
-  insertSale,
-  insertDetail,
-  adjustVariantStock,
-  insertStockMovement,
-  getSaleFinal,
-  getSaleDetailsFinal,
+  listProducts,
+  getProductById,
+  getVariantsByProductId,
+  createProduct,
+  createVariant,
+  updateProduct,
+  deleteProduct,
+  listDeletedProducts,
+  restoreProduct,
+  getLowStockProducts,
 };
