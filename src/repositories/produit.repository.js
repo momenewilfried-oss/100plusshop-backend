@@ -134,6 +134,43 @@ async function insertStockMovement(
   );
 }
 
+
+async function getVariantsByIds(db, ids) {
+  if (!ids || ids.length === 0) return [];
+  const placeholders = ids.map(() => '?').join(',');
+  const [rows] = await db.query(
+    `SELECT id_variante, stock, id_produit, taille, couleur
+     FROM variante
+     WHERE id_variante IN (${placeholders})
+     FOR UPDATE`,
+    ids
+  );
+  return rows || [];
+}
+
+async function getPromosForVariants(db, ids) {
+  if (!ids || ids.length === 0) return {};
+  const unique = [...new Set(ids.map(Number))];
+  const placeholders = unique.map(() => '?').join(',');
+  const [rows] = await db.query(
+    `SELECT vp.id_variante, p.type, p.valeur, p.nom
+     FROM promotion p
+     JOIN variante_promotion vp ON vp.id_promotion = p.id_promotion
+     WHERE vp.id_variante IN (${placeholders})
+       AND p.statut = 'active'
+       AND p.date_debut <= NOW()
+       AND p.date_fin >= NOW()
+     ORDER BY p.valeur DESC`,
+    unique
+  );
+  const map = {};
+  for (const r of rows || []) {
+    const k = Number(r.id_variante);
+    if (map[k] == null) map[k] = r; // première = meilleure valeur (ORDER BY DESC)
+  }
+  return map;
+}
+
 async function getSaleFinal(poolRef, id) {
   const db = poolRef || pool;
   const [rows] = await db.query('SELECT * FROM vente WHERE id_vente = ?', [id]);
@@ -150,6 +187,8 @@ async function getSaleDetailsFinal(poolRef, id) {
 }
 
 module.exports = {
+  getVariantsByIds,
+  getPromosForVariants,
   listSales,
   getSaleById,
   getSaleDetails,
