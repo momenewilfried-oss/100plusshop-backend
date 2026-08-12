@@ -210,6 +210,16 @@ async function resumeFactures() {
 }
 
 async function genererPdfFacture(id) {
+  let PDFDocument;
+  try {
+    PDFDocument = require('pdfkit');
+  } catch (e) {
+    throw new ApiError(
+      500,
+      'Module pdfkit absent sur le serveur. Exécutez : npm install pdfkit'
+    );
+  }
+
   const [factures] = await pool.query(
     `SELECT f.*,
             c.nom AS client_nom, c.prenom AS client_prenom,
@@ -221,7 +231,9 @@ async function genererPdfFacture(id) {
      WHERE f.id_facture = ?`,
     [id]
   );
-  if (factures.length === 0) throw new ApiError(404, 'Facture introuvable');
+  if (!factures || factures.length === 0) {
+    throw new ApiError(404, 'Facture introuvable');
+  }
   const facture = factures[0];
   let details = [];
   if (facture.id_vente) {
@@ -234,11 +246,8 @@ async function genererPdfFacture(id) {
        WHERE dv.id_vente = ?`,
       [facture.id_vente]
     );
-    details = lignes;
+    details = lignes || [];
   }
-
-  const dossierPdf = path.join(__dirname, '../../public/factures');
-  if (!fs.existsSync(dossierPdf)) fs.mkdirSync(dossierPdf, { recursive: true });
 
   const logoCandidates = [
     path.join(__dirname, '../../public/logo_100plus.jpg.jpeg'),
@@ -246,39 +255,58 @@ async function genererPdfFacture(id) {
     path.join(__dirname, '../../public/logo.png'),
     path.join(__dirname, '../../public/logo.jpg'),
   ];
-  const logoPath = logoCandidates.find((p) => fs.existsSync(p));
+  const logoPath = logoCandidates.find((p) => {
+    try {
+      return fs.existsSync(p);
+    } catch (_) {
+      return false;
+    }
+  });
 
-  const nomFichier = `${facture.numero}.pdf`;
-  const cheminFichier = path.join(dossierPdf, nomFichier);
+  const nomFichier = `${String(facture.numero || 'facture').replace(/[^\w.-]+/g, '_')}.pdf`;
 
   const doc = new PDFDocument({ margin: 50, size: 'A4' });
-  const stream = fs.createWriteStream(cheminFichier);
-  doc.pipe(stream);
+  const chunks = [];
+  doc.on('data', (c) => chunks.push(c));
+
+  const pdfDone = new Promise((resolve, reject) => {
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+  });
 
   // header
   const headerTop = 45;
   if (logoPath) {
     try {
       doc.image(logoPath, 50, headerTop, { width: 70, height: 70, fit: [70, 70] });
-    } catch (err) {
-      // ignore logo errors
-    }
+    } catch (_) {}
   }
   const textLeft = logoPath ? 130 : 50;
-  doc.fontSize(20).fillColor('#FF2D7B').text('100PLUSSHOP', textLeft, headerTop + 8, { continued: false });
+  doc
+    .fontSize(20)
+    .fillColor('#FF2D7B')
+    .text('100PLUSSHOP', textLeft, headerTop + 8, { continued: false });
   doc.fontSize(10).fillColor('#666666').text('Gestion boutique mode', textLeft, headerTop + 32);
-  doc.fontSize(16).fillColor('#000000').text('FACTURE', 350, headerTop + 8, { width: 195, align: 'right' });
-  doc.fontSize(11).fillColor('#333333').text(facture.numero, 350, headerTop + 30, { width: 195, align: 'right' });
+  doc
+    .fontSize(16)
+    .fillColor('#000000')
+    .text('FACTURE', 350, headerTop + 8, { width: 195, align: 'right' });
+  doc
+    .fontSize(11)
+    .fillColor('#333333')
+    .text(String(facture.numero || ''), 350, headerTop + 30, { width: 195, align: 'right' });
 
   doc.y = Math.max(doc.y, headerTop + 80);
   doc.moveDown(0.3);
   doc.moveTo(50, doc.y).lineTo(545, doc.y).strokeColor('#FF2D7B').lineWidth(1.5).stroke();
   doc.moveDown();
 
-  const dateFacture = facture.date_facture ? new Date(facture.date_facture).toLocaleDateString('fr-FR') : '-';
+  const dateFacture = facture.date_facture
+    ? new Date(facture.date_facture).toLocaleDateString('fr-FR')
+    : '-';
   doc.fontSize(11).fillColor('#000000');
   doc.text(`Date : ${dateFacture}`);
-  doc.text(`Statut : ${facture.statut}`);
+  doc.text(`Statut : ${facture.statut || '-'}`);
   doc.text(`Paiement : ${facture.mode_paiement_principal || '-'}`);
   doc.moveDown();
 
@@ -298,7 +326,10 @@ async function genererPdfFacture(id) {
 
   const y0 = doc.y;
   doc.rect(50, y0, 495, 20).fill('#FF2D7B');
-  doc.fillColor('#FFFFFF').fontSize(9).text('Article', 55, y0 + 5, { width: 175 })
+  doc
+    .fillColor('#FFFFFF')
+    .fontSize(9)
+    .text('Article', 55, y0 + 5, { width: 175 })
     .text('Qté', 235, y0 + 5, { width: 35 })
     .text('P.U.', 275, y0 + 5, { width: 80 })
     .text('Remise', 360, y0 + 5, { width: 70 })
@@ -309,7 +340,9 @@ async function genererPdfFacture(id) {
     const bg = i % 2 === 0 ? '#F9F9F9' : '#FFFFFF';
     doc.rect(50, y, 495, 20).fill(bg);
     const nom = `${ligne.produit_nom || ''} ${ligne.taille || ''} ${ligne.couleur || ''}`.trim();
-    doc.fillColor('#000000').fontSize(8)
+    doc
+      .fillColor('#000000')
+      .fontSize(8)
       .text(nom.substring(0, 34), 55, y + 5, { width: 175 })
       .text(String(ligne.quantite), 235, y + 5, { width: 35 })
       .text(formatFcfa(ligne.prix_unitaire), 275, y + 5, { width: 80 })
@@ -322,22 +355,32 @@ async function genererPdfFacture(id) {
   const remiseGlobale = Number(facture.remise_globale || 0);
   const total = Number(facture.montant_total || 0);
   doc.fontSize(11).fillColor('#000000');
-  if (remiseGlobale > 0) doc.text(`Remise globale : -${formatFcfa(remiseGlobale)}`, { align: 'right' });
-  doc.fontSize(14).fillColor('#FF2D7B').text(`Total TTC : ${formatFcfa(total)}`, { align: 'right' });
+  if (remiseGlobale > 0) {
+    doc.text(`Remise globale : -${formatFcfa(remiseGlobale)}`, { align: 'right' });
+  }
+  doc
+    .fontSize(14)
+    .fillColor('#FF2D7B')
+    .text(`Total TTC : ${formatFcfa(total)}`, { align: 'right' });
 
   doc.moveDown(2);
-  doc.fontSize(9).fillColor('#888888').text('Merci pour votre confiance — 100PLUSSHOP', { align: 'center' });
+  doc
+    .fontSize(9)
+    .fillColor('#888888')
+    .text('Merci pour votre confiance — 100PLUSSHOP', { align: 'center' });
 
   doc.end();
+  const buffer = await pdfDone;
 
-  await new Promise((resolve, reject) => {
-    stream.on('finish', resolve);
-    stream.on('error', reject);
-  });
+  // chemin_pdf optionnel (peut échouer en lecture seule — non bloquant)
+  try {
+    await pool.query('UPDATE facture SET chemin_pdf = ? WHERE id_facture = ?', [
+      `memory://${nomFichier}`,
+      id,
+    ]);
+  } catch (_) {}
 
-  const cheminRelatif = `/factures/${nomFichier}`;
-  await pool.query('UPDATE facture SET chemin_pdf = ? WHERE id_facture = ?', [cheminRelatif, id]);
-  return { cheminRelatif, cheminFichier, nomFichier };
+  return { buffer, nomFichier, contentType: 'application/pdf' };
 }
 
 module.exports = {
