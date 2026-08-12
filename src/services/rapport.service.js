@@ -75,6 +75,13 @@ async function rapportComptable({ debut, fin } = {}) {
     ca_par_jour: caJour,
     top_produits: top,
     depenses_par_categorie: depParCat,
+    // Règles explicites (source de vérité)
+    regles: {
+      recettes: "SUM(vente.montant_total) WHERE statut = 'validee' AND date_vente dans [debut, fin]",
+      depenses: "SUM(depense.montant) WHERE date_depense dans [debut, fin]",
+      achats: "SUM(facture_achat.montant_total) WHERE date_achat dans [debut, fin]",
+      benefice: "recettes - depenses - achats_fournisseurs",
+    },
   };
 }
 

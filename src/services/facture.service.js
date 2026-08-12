@@ -140,11 +140,21 @@ async function modifierStatutFacture(id, statut, user = null) {
 
 async function resumeFactures() {
   const [total] = await pool.query('SELECT COUNT(*) AS total FROM facture');
+  // Factures payées du mois (documents)
   const [payees] = await pool.query(`
-    SELECT COALESCE(SUM(montant_total), 0) AS recettes
-    FROM facture WHERE statut = 'Payée'
+    SELECT COALESCE(SUM(montant_total), 0) AS total
+    FROM facture
+    WHERE statut = 'Payée'
       AND date_facture >= date_trunc('month', CURRENT_DATE)
       AND date_facture < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'
+  `);
+  // Même règle que le rapport : CA = ventes validées du mois
+  const [caVentes] = await pool.query(`
+    SELECT COALESCE(SUM(montant_total), 0) AS total
+    FROM vente
+    WHERE statut = 'validee'
+      AND date_vente >= date_trunc('month', CURRENT_DATE)
+      AND date_vente < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'
   `);
   const [enAttente] = await pool.query(`
     SELECT COALESCE(SUM(montant_total), 0) AS montant
@@ -154,9 +164,15 @@ async function resumeFactures() {
     SELECT COALESCE(SUM(montant_total), 0) AS montant
     FROM facture WHERE statut = 'Retard'
   `);
+  const facturesPayeesMois = Number(payees[0].total);
+  const caVentesMois = Number(caVentes[0].total);
   return {
     total_factures: Number(total[0].total),
-    recettes_payees_mois: Number(payees[0].recettes),
+    // Ancien champ conservé pour compat front : = CA ventes (règle unique)
+    recettes_payees_mois: caVentesMois,
+    ca_ventes_mois: caVentesMois,
+    factures_payees_mois: facturesPayeesMois,
+    ecart_factures_vs_ventes: facturesPayeesMois - caVentesMois,
     en_attente: Number(enAttente[0].montant),
     retards: Number(retards[0].montant),
   };
@@ -190,6 +206,9 @@ async function genererPdfFacture(id) {
     details = lignes;
   }
 
+  const dossierPdf = path.join(__dirname, '../../public/factures');
+  if (!fs.existsSync(dossierPdf)) fs.mkdirSync(dossierPdf, { recursive: true });
+
   const logoCandidates = [
     path.join(__dirname, '../../public/logo_100plus.jpg.jpeg'),
     path.join(__dirname, '../../public/logo_100plus.jpg'),
@@ -199,10 +218,11 @@ async function genererPdfFacture(id) {
   const logoPath = logoCandidates.find((p) => fs.existsSync(p));
 
   const nomFichier = `${facture.numero}.pdf`;
+  const cheminFichier = path.join(dossierPdf, nomFichier);
 
   const doc = new PDFDocument({ margin: 50, size: 'A4' });
-  const chunks = [];
-  doc.on('data', (chunk) => chunks.push(chunk));
+  const stream = fs.createWriteStream(cheminFichier);
+  doc.pipe(stream);
 
   // header
   const headerTop = 45;
@@ -279,14 +299,14 @@ async function genererPdfFacture(id) {
 
   doc.end();
 
-  const buffer = await new Promise((resolve, reject) => {
-    doc.on('end', () => resolve(Buffer.concat(chunks)));
-    doc.on('error', reject);
+  await new Promise((resolve, reject) => {
+    stream.on('finish', resolve);
+    stream.on('error', reject);
   });
 
-  // On garde une trace du numéro de facture liée au PDF, sans dépendre du disque.
-  await pool.query('UPDATE facture SET chemin_pdf = ? WHERE id_facture = ?', [nomFichier, id]);
-  return { buffer, nomFichier };
+  const cheminRelatif = `/factures/${nomFichier}`;
+  await pool.query('UPDATE facture SET chemin_pdf = ? WHERE id_facture = ?', [cheminRelatif, id]);
+  return { cheminRelatif, cheminFichier, nomFichier };
 }
 
 module.exports = {
