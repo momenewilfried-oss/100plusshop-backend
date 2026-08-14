@@ -1,7 +1,7 @@
 const creer = {
   body: {
-    // Client optionnel : vente anonyme autorisée (id_client NULL en base)
     idClient: { required: false, type: 'number' },
+    clientLibre: { required: false, type: 'string', maxLength: 200 },
     remiseGlobale: { required: false, type: 'number' },
     modePaiementPrincipal: { required: true, type: 'string' },
     lignes: { required: true, type: 'array' },
