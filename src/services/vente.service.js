@@ -35,7 +35,7 @@ async function obtenirVente(id) {
   return { ...vente, details };
 }
 
-async function creerVente({ idClient, remiseGlobale, modePaiementPrincipal, lignes }, currentUser) {
+async function creerVente({ idClient, clientLibre, remiseGlobale, modePaiementPrincipal, lignes }, currentUser) {
   const idVendeur = currentUser.id;
   if (!lignes || lignes.length === 0) throw new ApiError(400, 'La vente doit contenir au moins une ligne');
 
@@ -77,6 +77,7 @@ async function creerVente({ idClient, remiseGlobale, modePaiementPrincipal, lign
     const idVente = await venteRepository.insertSale(connection, {
       idVendeur,
       idClient,
+      clientLibre,
       remiseGlobale,
       montantTotal,
       modePaiementPrincipal,
