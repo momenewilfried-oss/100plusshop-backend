@@ -4,7 +4,14 @@ async function listSales() {
   const [rows] = await pool.query(`
     SELECT v.*,
            u.nom AS vendeur_nom, u.prenom AS vendeur_prenom,
-           c.nom AS client_nom, c.prenom AS client_prenom,
+           CASE
+             WHEN v.client_libre IS NOT NULL AND TRIM(v.client_libre) <> '' THEN TRIM(v.client_libre)
+             ELSE c.nom
+           END AS client_nom,
+           CASE
+             WHEN v.client_libre IS NOT NULL AND TRIM(v.client_libre) <> '' THEN NULL
+             ELSE c.prenom
+           END AS client_prenom,
            (
              SELECT STRING_AGG(sub.ligne, ', ' ORDER BY sub.id_detail)
              FROM (
@@ -28,7 +35,14 @@ async function getSaleById(id) {
   const [rows] = await pool.query(
     `SELECT v.*,
             u.nom AS vendeur_nom, u.prenom AS vendeur_prenom,
-            c.nom AS client_nom, c.prenom AS client_prenom
+            CASE
+              WHEN v.client_libre IS NOT NULL AND TRIM(v.client_libre) <> '' THEN TRIM(v.client_libre)
+              ELSE c.nom
+            END AS client_nom,
+            CASE
+              WHEN v.client_libre IS NOT NULL AND TRIM(v.client_libre) <> '' THEN NULL
+              ELSE c.prenom
+            END AS client_prenom
      FROM vente v
      LEFT JOIN utilisateur u ON v.id_vendeur = u.id_utilisateur
      LEFT JOIN client c ON v.id_client = c.id_client
@@ -76,31 +90,63 @@ async function getPromoForVariant(db, idVariante) {
 
 async function insertSale(
   db,
-  { idVendeur, idClient, remiseGlobale, montantTotal, modePaiementPrincipal }
+  { idVendeur, idClient, clientLibre, remiseGlobale, montantTotal, modePaiementPrincipal }
 ) {
-  const [result] = await db.query(
-    `INSERT INTO vente
-     (date_vente, id_vendeur, id_client, remise_globale, montant_total, mode_paiement_principal, statut)
-     VALUES (NOW(), ?, ?, ?, ?, ?, 'validee')`,
-    [
-      idVendeur,
-      idClient || null,
-      remiseGlobale || 0,
-      montantTotal,
-      modePaiementPrincipal,
-    ]
-  );
+  const libre =
+    clientLibre && String(clientLibre).trim()
+      ? String(clientLibre).trim().slice(0, 200)
+      : null;
+  const idCli = idClient ? Number(idClient) : null;
+  const nomLibre = idCli ? null : libre;
 
-  // Toujours privilégier id_vente (jamais un éventuel id_client pris par erreur)
-  const id =
-    result[0]?.id_vente ??
-    result.rows?.[0]?.id_vente ??
-    result.insertId;
-
-  if (id == null || Number(id) <= 0) {
-    throw new Error('INSERT vente: id_vente non retourné');
+  try {
+    const [result] = await db.query(
+      `INSERT INTO vente
+       (date_vente, id_vendeur, id_client, client_libre, remise_globale, montant_total, mode_paiement_principal, statut)
+       VALUES (NOW(), ?, ?, ?, ?, ?, ?, 'validee')`,
+      [
+        idVendeur,
+        idCli,
+        nomLibre,
+        remiseGlobale || 0,
+        montantTotal,
+        modePaiementPrincipal,
+      ]
+    );
+    const id =
+      result[0]?.id_vente ??
+      result.rows?.[0]?.id_vente ??
+      result.insertId;
+    if (id == null || Number(id) <= 0) {
+      throw new Error('INSERT vente: id_vente non retourné');
+    }
+    return Number(id);
+  } catch (e) {
+    // Colonne client_libre absente : fallback sans casser les ventes
+    if (String(e.message || e).includes('client_libre')) {
+      const [result] = await db.query(
+        `INSERT INTO vente
+         (date_vente, id_vendeur, id_client, remise_globale, montant_total, mode_paiement_principal, statut)
+         VALUES (NOW(), ?, ?, ?, ?, ?, 'validee')`,
+        [
+          idVendeur,
+          idCli,
+          remiseGlobale || 0,
+          montantTotal,
+          modePaiementPrincipal,
+        ]
+      );
+      const id =
+        result[0]?.id_vente ??
+        result.rows?.[0]?.id_vente ??
+        result.insertId;
+      if (id == null || Number(id) <= 0) {
+        throw new Error('INSERT vente: id_vente non retourné');
+      }
+      return Number(id);
+    }
+    throw e;
   }
-  return Number(id);
 }
 
 async function insertDetail(
