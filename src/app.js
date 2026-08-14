@@ -27,6 +27,8 @@ const achatsRoutes = require('./route/achat.route');
 const promotionsRoutes = require('./route/promotion.route');
 const auditRoutes = require('./route/audit.route');
 const corbeilleRoutes = require('./route/corbeille.route');
+const marquesRoutes = require('./route/marque.route');
+const categoriesRoutes = require('./route/categorie.route');
 
 const app = express();
 const isProd = process.env.NODE_ENV === 'production';
@@ -51,12 +53,10 @@ const corsOptions = {
   origin(origin, callback) {
     if (!origin) return callback(null, true);
 
-    // CORS_ORIGINS=* → tout autoriser
     if (allowedOrigins.includes('*')) {
       return callback(null, true);
     }
 
-    // Localhost / 127.0.0.1 toujours OK en dev
     if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
       return callback(null, true);
     }
@@ -132,6 +132,8 @@ app.use('/api/achats', achatsRoutes);
 app.use('/api/promotions', promotionsRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/corbeille', corbeilleRoutes);
+app.use('/api/marques', marquesRoutes);
+app.use('/api/categories', categoriesRoutes);
 
 app.use(express.static(path.join(__dirname, '../public')));
 
@@ -175,7 +177,6 @@ app.listen(PORT, async () => {
     );
   }
 
-  // Test connexion base au démarrage
   try {
     const pool = require('./config/database');
     await pool.query('SELECT 1 AS ok');
