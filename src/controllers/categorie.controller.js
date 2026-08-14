@@ -10,11 +10,24 @@ async function listerCategories(req, res, next) {
 
 async function creerCategorie(req, res, next) {
   try {
-    const row = await categorieService.createCategorie(req.body || {}, req.utilisateur);
+    const row = await categorieService.createCategorie(
+      req.body || {},
+      req.utilisateur
+    );
     res.status(201).json(row);
   } catch (e) {
     next(e);
   }
 }
 
-module.exports = { listerCategories, creerCategorie };
+async function supprimerCategorie(req, res, next) {
+  try {
+    res.json(
+      await categorieService.deleteCategorie(req.params.id, req.utilisateur)
+    );
+  } catch (e) {
+    next(e);
+  }
+}
+
+module.exports = { listerCategories, creerCategorie, supprimerCategorie };
