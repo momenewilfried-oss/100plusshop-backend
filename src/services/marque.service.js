@@ -1,3 +1,4 @@
+
 const { ApiError } = require('../utils/error-handler');
 const marqueRepository = require('../repositories/marque.repository');
 const { logAction } = require('./audit.service');
@@ -18,7 +19,9 @@ async function createMarque(body, user) {
     nom,
     description: body?.description ? String(body.description).trim() : null,
   });
-  if (!id) throw new ApiError(500, 'Création marque : id non retourné');
+  if (!id || Number.isNaN(id)) {
+    throw new ApiError(500, 'Création marque : id non retourné');
+  }
 
   const row = await marqueRepository.getById(id);
   try {
@@ -32,4 +35,31 @@ async function createMarque(body, user) {
   return row;
 }
 
-module.exports = { listMarques, createMarque };
+async function deleteMarque(id, user) {
+  const row = await marqueRepository.getById(id);
+  if (!row) throw new ApiError(404, 'Marque introuvable');
+
+  const n = await marqueRepository.countProduits(id);
+  if (n > 0) {
+    throw new ApiError(
+      409,
+      `Impossible de supprimer : ${n} produit(s) utilisent cette marque`
+    );
+  }
+
+  const ok = await marqueRepository.remove(id);
+  if (!ok) throw new ApiError(404, 'Marque introuvable');
+
+  try {
+    await logAction({
+      userId: user?.id || null,
+      module: 'marque',
+      action: 'DELETE',
+      oldValue: row,
+    });
+  } catch (_) {}
+
+  return { message: 'Marque supprimée', id: Number(id) };
+}
+
+module.exports = { listMarques, createMarque, deleteMarque };
