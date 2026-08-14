@@ -18,7 +18,9 @@ async function createCategorie(body, user) {
     nom,
     description: body?.description ? String(body.description).trim() : null,
   });
-  if (!id) throw new ApiError(500, 'Création catégorie : id non retourné');
+  if (!id || Number.isNaN(id)) {
+    throw new ApiError(500, 'Création catégorie : id non retourné');
+  }
 
   const row = await categorieRepository.getById(id);
   try {
@@ -32,4 +34,31 @@ async function createCategorie(body, user) {
   return row;
 }
 
-module.exports = { listCategories, createCategorie };
+async function deleteCategorie(id, user) {
+  const row = await categorieRepository.getById(id);
+  if (!row) throw new ApiError(404, 'Catégorie introuvable');
+
+  const n = await categorieRepository.countProduits(id);
+  if (n > 0) {
+    throw new ApiError(
+      409,
+      `Impossible de supprimer : ${n} produit(s) utilisent cette catégorie`
+    );
+  }
+
+  const ok = await categorieRepository.remove(id);
+  if (!ok) throw new ApiError(404, 'Catégorie introuvable');
+
+  try {
+    await logAction({
+      userId: user?.id || null,
+      module: 'categorie',
+      action: 'DELETE',
+      oldValue: row,
+    });
+  } catch (_) {}
+
+  return { message: 'Catégorie supprimée', id: Number(id) };
+}
+
+module.exports = { listCategories, createCategorie, deleteCategorie };
