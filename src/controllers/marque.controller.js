@@ -17,4 +17,12 @@ async function creerMarque(req, res, next) {
   }
 }
 
-module.exports = { listerMarques, creerMarque };
+async function supprimerMarque(req, res, next) {
+  try {
+    res.json(await marqueService.deleteMarque(req.params.id, req.utilisateur));
+  } catch (e) {
+    next(e);
+  }
+}
+
+module.exports = { listerMarques, creerMarque, supprimerMarque };
