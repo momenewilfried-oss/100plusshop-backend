@@ -25,8 +25,16 @@ function genererNumero() {
 async function listerFactures(statut) {
   let sql = `
     SELECT f.*,
-           c.nom AS client_nom, c.prenom AS client_prenom, c.email AS client_email,
-           v.date_vente, v.mode_paiement_principal
+           CASE
+              WHEN v.client_libre IS NOT NULL AND TRIM(v.client_libre) <> '' THEN TRIM(v.client_libre)
+              ELSE c.nom
+            END AS client_nom,
+            CASE
+              WHEN v.client_libre IS NOT NULL AND TRIM(v.client_libre) <> '' THEN NULL
+              ELSE c.prenom
+            END AS client_prenom,
+           c.email AS client_email,
+           v.date_vente, v.mode_paiement_principal, v.client_libre
     FROM facture f
     LEFT JOIN vente v ON f.id_vente = v.id_vente
     LEFT JOIN client c ON v.id_client = c.id_client
@@ -44,8 +52,16 @@ async function listerFactures(statut) {
 async function obtenirFacture(id) {
   const [factures] = await pool.query(
     `SELECT f.*,
-            c.nom AS client_nom, c.prenom AS client_prenom, c.email AS client_email, c.telephone AS client_telephone,
-            v.date_vente, v.mode_paiement_principal, v.remise_globale
+            CASE
+              WHEN v.client_libre IS NOT NULL AND TRIM(v.client_libre) <> '' THEN TRIM(v.client_libre)
+              ELSE c.nom
+            END AS client_nom,
+            CASE
+              WHEN v.client_libre IS NOT NULL AND TRIM(v.client_libre) <> '' THEN NULL
+              ELSE c.prenom
+            END AS client_prenom,
+            c.email AS client_email, c.telephone AS client_telephone,
+            v.date_vente, v.mode_paiement_principal, v.remise_globale, v.client_libre
      FROM facture f
      LEFT JOIN vente v ON f.id_vente = v.id_vente
      LEFT JOIN client c ON v.id_client = c.id_client
@@ -222,9 +238,16 @@ async function genererPdfFacture(id) {
 
   const [factures] = await pool.query(
     `SELECT f.*,
-            c.nom AS client_nom, c.prenom AS client_prenom,
+            CASE
+              WHEN v.client_libre IS NOT NULL AND TRIM(v.client_libre) <> '' THEN TRIM(v.client_libre)
+              ELSE c.nom
+            END AS client_nom,
+            CASE
+              WHEN v.client_libre IS NOT NULL AND TRIM(v.client_libre) <> '' THEN NULL
+              ELSE c.prenom
+            END AS client_prenom,
             c.email AS client_email, c.telephone AS client_telephone,
-            v.date_vente, v.mode_paiement_principal, v.remise_globale
+            v.date_vente, v.mode_paiement_principal, v.remise_globale, v.client_libre
      FROM facture f
      LEFT JOIN vente v ON f.id_vente = v.id_vente
      LEFT JOIN client c ON v.id_client = c.id_client
@@ -304,13 +327,12 @@ async function genererPdfFacture(id) {
   doc.text(`Paiement : ${facture.mode_paiement_principal || '-'}`, marginX, doc.y, {
     width: contentW,
   });
-  if (facture.client_nom) {
-    doc.text(
-      `Client : ${`${facture.client_prenom || ''} ${facture.client_nom}`.trim()}`,
-      marginX,
-      doc.y,
-      { width: contentW }
-    );
+  const nomClient = [facture.client_prenom, facture.client_nom]
+    .filter(Boolean)
+    .join(' ')
+    .trim() || (facture.client_libre ? String(facture.client_libre).trim() : '');
+  if (nomClient) {
+    doc.text(`Client : ${nomClient}`, marginX, doc.y, { width: contentW });
   } else {
     doc.text('Client : Anonyme', marginX, doc.y, { width: contentW });
   }
