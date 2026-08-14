@@ -272,20 +272,27 @@ async function genererPdfFacture(id) {
     details = lignes || [];
   }
 
-  // Format ticket caisse ~80 mm de large (226 pt)
-  const TICKET_W = 226;
-  const marginX = 12;
+  // Imprimantes thermiques portables supermarché :
+  // 58 mm (très portable) ou 80 mm — défaut 58 mm
+  const widthMm = Number(process.env.RECEIPT_WIDTH_MM || 58);
+  const mm = widthMm <= 60 ? 58 : 80;
+  // 1 mm ≈ 2.83465 pt
+  const TICKET_W = Math.round(mm * 2.83465);
+  const marginX = mm <= 58 ? 8 : 10;
   const contentW = TICKET_W - marginX * 2;
-  // Hauteur dynamique selon le nombre de lignes
-  const baseH = 220;
-  const lineH = 28;
-  const TICKET_H = Math.max(400, baseH + details.length * lineH + 80);
+  const lineH = 14;
+  const baseH = 160;
+  const TICKET_H = Math.max(
+    280,
+    baseH + (details.length || 1) * (lineH * 2 + 4) + 40
+  );
 
   const nomFichier = `${String(facture.numero || 'ticket').replace(/[^\w.-]+/g, '_')}.pdf`;
 
   const doc = new PDFDocument({
     size: [TICKET_W, TICKET_H],
     margin: marginX,
+    autoFirstPage: true,
   });
   const chunks = [];
   doc.on('data', (c) => chunks.push(c));
@@ -294,92 +301,105 @@ async function genererPdfFacture(id) {
     doc.on('error', reject);
   });
 
-  const center = (text, opts = {}) => {
-    doc.text(text, marginX, doc.y, {
+  const center = (text, size = 8) => {
+    doc.fontSize(size).fillColor('#000000');
+    doc.text(String(text), marginX, doc.y, {
       width: contentW,
       align: 'center',
-      ...opts,
+      lineGap: 1,
     });
   };
 
-  const line = (ch = '-') => {
-    doc
-      .fontSize(9)
-      .fillColor('#333333')
-      .text(ch.repeat(32), marginX, doc.y, { width: contentW, align: 'center' });
+  const sep = (ch = '-') => {
+    const n = Math.max(16, Math.floor(contentW / 4.2));
+    doc.fontSize(7).fillColor('#000000');
+    doc.text(ch.repeat(n), marginX, doc.y, {
+      width: contentW,
+      align: 'center',
+      lineGap: 0,
+    });
   };
 
-  // ——— En-tête boutique ———
-  doc.fontSize(14).fillColor('#000000');
-  center('100PLUSSHOP');
-  doc.moveDown(0.15);
-  doc.fontSize(8).fillColor('#444444');
-  center('Ticket de caisse');
-  doc.moveDown(0.3);
-  line('=');
+  const row2 = (left, right, size = 8, bold = false) => {
+    doc.fontSize(size).fillColor('#000000');
+    const y = doc.y;
+    doc.text(String(left), marginX, y, {
+      width: contentW * 0.62,
+      align: 'left',
+      lineGap: 0,
+    });
+    doc.text(String(right), marginX + contentW * 0.55, y, {
+      width: contentW * 0.45,
+      align: 'right',
+      lineGap: 0,
+    });
+  };
+
+  // ——— En-tête ———
+  center('100PLUSSHOP', 11);
+  center('TICKET DE CAISSE', 7);
+  sep('=');
 
   const dateFacture = facture.date_facture
     ? new Date(facture.date_facture).toLocaleString('fr-FR')
     : '-';
-  doc.fontSize(8).fillColor('#000000');
-  doc.text(`N° ${facture.numero || '-'}`, marginX, doc.y, { width: contentW });
-  doc.text(`Date ${dateFacture}`, marginX, doc.y, { width: contentW });
-  doc.text(`Paiement : ${facture.mode_paiement_principal || '-'}`, marginX, doc.y, {
+  doc.fontSize(7).fillColor('#000000');
+  doc.text(`N ${facture.numero || '-'}`, marginX, doc.y, {
     width: contentW,
+    lineGap: 1,
   });
-  const nomClient = [facture.client_prenom, facture.client_nom]
-    .filter(Boolean)
-    .join(' ')
-    .trim() || (facture.client_libre ? String(facture.client_libre).trim() : '');
-  if (nomClient) {
-    doc.text(`Client : ${nomClient}`, marginX, doc.y, { width: contentW });
-  } else {
-    doc.text('Client : Anonyme', marginX, doc.y, { width: contentW });
-  }
-  doc.moveDown(0.2);
-  line('-');
+  doc.text(`${dateFacture}`, marginX, doc.y, { width: contentW, lineGap: 1 });
+  doc.text(`Paiement: ${facture.mode_paiement_principal || '-'}`, marginX, doc.y, {
+    width: contentW,
+    lineGap: 1,
+  });
+
+  const nomClient =
+    [facture.client_prenom, facture.client_nom].filter(Boolean).join(' ').trim() ||
+    (facture.client_libre ? String(facture.client_libre).trim() : '');
+  doc.text(`Client: ${nomClient || 'Anonyme'}`, marginX, doc.y, {
+    width: contentW,
+    lineGap: 1,
+  });
+  sep('-');
 
   // ——— Articles ———
-  doc.fontSize(8).fillColor('#000000');
   for (const l of details) {
-    const nom = `${l.produit_nom || 'Article'}`.trim();
+    const nom = String(l.produit_nom || 'Article').trim();
     const varTxt = [l.taille, l.couleur].filter(Boolean).join(' ');
     const titre = varTxt ? `${nom} (${varTxt})` : nom;
-    doc.text(titre.substring(0, 36), marginX, doc.y, { width: contentW });
+    doc.fontSize(8).fillColor('#000000');
+    doc.text(titre.substring(0, mm <= 58 ? 28 : 36), marginX, doc.y, {
+      width: contentW,
+      lineGap: 1,
+    });
     const qte = Number(l.quantite) || 0;
     const pu = formatFcfa(l.prix_unitaire);
     const st = formatFcfa(l.sous_total);
-    doc.text(`${qte} x ${pu}`, marginX, doc.y, { width: contentW * 0.55, continued: true });
-    doc.text(st, { width: contentW * 0.45, align: 'right' });
+    row2(`${qte} x ${pu}`, st, 8);
     if (Number(l.remise) > 0) {
-      doc.fillColor('#666666').text(`  remise -${formatFcfa(l.remise)}`, marginX, doc.y, {
+      doc.fontSize(7).fillColor('#333333');
+      doc.text(`  rem -${formatFcfa(l.remise)}`, marginX, doc.y, {
         width: contentW,
+        lineGap: 1,
       });
-      doc.fillColor('#000000');
     }
-    doc.moveDown(0.15);
   }
 
-  line('-');
+  sep('-');
   const remiseGlobale = Number(facture.remise_globale || 0);
   const total = Number(facture.montant_total || 0);
   if (remiseGlobale > 0) {
-    doc.fontSize(8);
-    doc.text(`Remise globale`, marginX, doc.y, { width: contentW * 0.55, continued: true });
-    doc.text(`-${formatFcfa(remiseGlobale)}`, { width: contentW * 0.45, align: 'right' });
+    row2('Remise', `-${formatFcfa(remiseGlobale)}`, 8);
   }
   doc.moveDown(0.15);
-  doc.fontSize(11).fillColor('#000000');
-  doc.text('TOTAL', marginX, doc.y, { width: contentW * 0.45, continued: true });
-  doc.text(formatFcfa(total), { width: contentW * 0.55, align: 'right' });
-  doc.moveDown(0.35);
-  line('=');
-  doc.fontSize(8).fillColor('#333333');
-  center('Merci de votre visite !');
-  center('100PLUSSHOP');
-  doc.moveDown(0.2);
-  doc.fontSize(7).fillColor('#888888');
-  center(String(facture.statut || ''));
+  row2('TOTAL', formatFcfa(total), 10, true);
+  sep('=');
+  center('Merci de votre visite !', 7);
+  center('100PLUSSHOP', 7);
+  if (facture.statut) {
+    center(String(facture.statut), 7);
+  }
 
   doc.end();
   const buffer = await pdfDone;
