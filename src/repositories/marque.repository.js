@@ -2,7 +2,10 @@ const pool = require('../config/database');
 
 async function listMarques() {
   const [rows] = await pool.query(
-    'SELECT id_marque, nom, description FROM marque ORDER BY nom ASC'
+    `SELECT m.id_marque, m.nom, m.description,
+            (SELECT COUNT(*) FROM produit p WHERE p.id_marque = m.id_marque) AS nb_produits
+     FROM marque m
+     ORDER BY m.nom ASC`
   );
   return rows;
 }
@@ -35,4 +38,24 @@ async function create({ nom, description }) {
   return Number(id);
 }
 
-module.exports = { listMarques, getById, findByNom, create };
+async function countProduits(idMarque) {
+  const [rows] = await pool.query(
+    'SELECT COUNT(*) AS n FROM produit WHERE id_marque = ?',
+    [idMarque]
+  );
+  return Number(rows[0]?.n || 0);
+}
+
+async function remove(id) {
+  const [r] = await pool.query('DELETE FROM marque WHERE id_marque = ?', [id]);
+  return Number(r.affectedRows ?? r.rowCount ?? 0);
+}
+
+module.exports = {
+  listMarques,
+  getById,
+  findByNom,
+  create,
+  countProduits,
+  remove,
+};
