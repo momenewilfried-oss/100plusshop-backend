@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const verifierToken = require('../middleware/auth.middleware');
 const autoriserRoles = require('../middleware/role.middleware');
+const antiDoubleSubmit = require('../middleware/antiDoubleSubmit.middleware');
 const {
   listerDepenses,
   creerDepense,
@@ -16,13 +17,14 @@ router.use(verifierToken);
 router.get('/', autoriserRoles('administrateur', 'gerant'), listerDepenses);
 router.post(
   '/',
-  autoriserRoles('administrateur', 'gerant'),
+  autoriserRoles('administrateur', 'gerant'), antiDoubleSubmit(),
   validateRequest(depenseSchemas.creer),
   creerDepense
 );
 router.put(
   '/:id',
   autoriserRoles('administrateur', 'gerant'),
+  antiDoubleSubmit(),
   validateRequest(depenseSchemas.modifier),
   modifierDepense
 );
