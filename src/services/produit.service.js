@@ -35,11 +35,22 @@ async function creerProduit(payload, user) {
   }
   assertPrixValides(payload);
 
+  const ref = String(reference).trim();
+  const nomP = String(nom).trim();
+  const existRef = await produitRepository.findByReference(ref);
+  if (existRef) {
+    throw new ApiError(409, `Un produit avec la référence « ${ref} » existe déjà`);
+  }
+  const existNom = await produitRepository.findByNom(nomP);
+  if (existNom) {
+    throw new ApiError(409, `Un produit nommé « ${nomP} » existe déjà`);
+  }
+
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
     const idProduitCree = await produitRepository.createProduct({
-      reference, nom, description, idMarque, idCategorie,
+      reference: ref, nom: nomP, description, idMarque, idCategorie,
       matiere, genre, saison, prixAchat, prixVente,
       seuilAlerte, photo, idFournisseur,
     }, connection);
