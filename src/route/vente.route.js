@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const verifierToken = require('../middleware/auth.middleware');
 const autoriserRoles = require('../middleware/role.middleware');
+const antiDoubleSubmit = require('../middleware/antiDoubleSubmit.middleware');
 const { validateRequest } = require('../validators/validateRequest');
 const venteSchemas = require('../validators/vente.validator');
 const {
@@ -15,7 +16,7 @@ router.use(verifierToken);
 
 router.get('/', autoriserRoles('administrateur', 'gerant', 'vendeur'), listerVentes);
 router.get('/:id', autoriserRoles('administrateur', 'gerant', 'vendeur'), obtenirVente);
-router.post('/', autoriserRoles('administrateur', 'gerant', 'vendeur'), validateRequest(venteSchemas.creer), creerVente);
+router.post('/', autoriserRoles('administrateur', 'gerant', 'vendeur'), antiDoubleSubmit(), validateRequest(venteSchemas.creer), creerVente);
 router.patch('/:id/annuler', autoriserRoles('administrateur', 'gerant'), annulerVente);
 
 module.exports = router;
