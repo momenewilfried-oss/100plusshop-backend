@@ -68,6 +68,21 @@ async function getPromotion(id) {
 }
 
 async function createPromotion({ nom, type, valeur: valeurIn, dateDebut, dateFin, date_debut, date_fin, statut, variantes } = {}) {
+  const nomP = String(nom || '').trim();
+  if (!nomP) throw new ApiError(400, 'Nom de promotion obligatoire');
+  try {
+    const [exist] = await pool.query(
+      'SELECT id_promotion FROM promotion WHERE LOWER(TRIM(nom)) = LOWER(TRIM(?)) LIMIT 1',
+      [nomP]
+    );
+    if (exist && exist.length) {
+      throw new ApiError(409, `Une promotion nommée « ${nomP} » existe déjà`);
+    }
+  } catch (e) {
+    if (e.statusCode === 409 || e.status === 409) throw e;
+    // table absente / ignore
+  }
+
   let valeur = valeurIn;
   const dDebut = date_debut || dateDebut;
   const dFin = date_fin || dateFin;
