@@ -42,6 +42,25 @@ async function creerMouvement(body, user) {
     throw new ApiError(400, 'idVariante, typeMouvement et quantite obligatoires');
   }
 
+  // Anti double-clic : même mouvement dans les 5 dernières secondes
+  try {
+    const [dup] = await pool.query(
+      `SELECT 1 AS ok FROM mouvement_stock
+       WHERE variante = ?
+         AND "typeMouvement" = ?
+         AND quantite = ?
+         AND "dateMouvement" >= NOW() - INTERVAL '5 seconds'
+       LIMIT 1`,
+      [idVariante, typeMouvement, Number(quantite)]
+    );
+    if (dup && dup.length) {
+      throw new ApiError(409, 'Mouvement de stock identique déjà enregistré il y a moins de 5 secondes');
+    }
+  } catch (e) {
+    if (e.statusCode === 409 || e.status === 409) throw e;
+    // colonnes différentes : on ignore le check soft
+  }
+
   const db = await pool.getConnection();
   try {
     await db.beginTransaction();
