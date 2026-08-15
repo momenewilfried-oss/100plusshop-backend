@@ -18,6 +18,20 @@ async function creerClient(body, user) {
   if (!nom && !prenom) throw new ApiError(400, 'nom ou prenom obligatoire');
   const email = assertEmailOptional(body?.email, ApiError);
   const telephone = assertPhoneOptional(body?.telephone, ApiError);
+
+  if (email) {
+    const ex = await clientRepository.findByEmail(email);
+    if (ex) throw new ApiError(409, 'Un client avec cet e-mail existe déjà');
+  }
+  if (telephone) {
+    const ex = await clientRepository.findByTelephone(telephone);
+    if (ex) throw new ApiError(409, 'Un client avec ce numéro de téléphone existe déjà');
+  }
+  const exNom = await clientRepository.findByNomPrenom(nom, prenom);
+  if (exNom) {
+    throw new ApiError(409, 'Un client avec le même nom et prénom existe déjà');
+  }
+
   const id = await clientRepository.createClient({ nom, prenom, telephone, email });
   const created = await clientRepository.getClientById(id);
   await logAction({
