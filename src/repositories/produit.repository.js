@@ -124,7 +124,52 @@ async function restoreProduct(id) {
   return result.affectedRows;
 }
 
+
+async function findByReference(reference, excludeId = null) {
+  if (!reference) return null;
+  const params = [reference];
+  let sql = 'SELECT * FROM produit WHERE LOWER(TRIM(reference)) = LOWER(TRIM(?))';
+  if (excludeId) {
+    sql += ' AND id_produit <> ?';
+    params.push(excludeId);
+  }
+  sql += ' LIMIT 1';
+  try {
+    const [rows] = await pool.query(
+      sql.replace(' LIMIT 1', ' AND deleted_at IS NULL LIMIT 1'),
+      params
+    );
+    return rows[0] || null;
+  } catch {
+    const [rows] = await pool.query(sql, params);
+    return rows[0] || null;
+  }
+}
+
+async function findByNom(nom, excludeId = null) {
+  if (!nom) return null;
+  const params = [nom];
+  let sql = 'SELECT * FROM produit WHERE LOWER(TRIM(nom)) = LOWER(TRIM(?))';
+  if (excludeId) {
+    sql += ' AND id_produit <> ?';
+    params.push(excludeId);
+  }
+  sql += ' LIMIT 1';
+  try {
+    const [rows] = await pool.query(
+      sql.replace(' LIMIT 1', ' AND deleted_at IS NULL LIMIT 1'),
+      params
+    );
+    return rows[0] || null;
+  } catch {
+    const [rows] = await pool.query(sql, params);
+    return rows[0] || null;
+  }
+}
+
 module.exports = {
+  findByReference,
+  findByNom,
   listProducts,
   getProductById,
   getVariantsByProductId,
