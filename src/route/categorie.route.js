@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const verifierToken = require('../middleware/auth.middleware');
 const autoriserRoles = require('../middleware/role.middleware');
+const antiDoubleSubmit = require('../middleware/antiDoubleSubmit.middleware');
 const { validateRequest } = require('../validators/validateRequest');
 const categorieSchemas = require('../validators/categorie.validator');
 const {
@@ -19,7 +20,7 @@ router.get(
 );
 router.post(
   '/',
-  autoriserRoles('administrateur', 'gerant'),
+  autoriserRoles('administrateur', 'gerant'), antiDoubleSubmit(),
   validateRequest(categorieSchemas.creer),
   creerCategorie
 );
