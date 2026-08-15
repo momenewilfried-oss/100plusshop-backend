@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const verifierToken = require('../middleware/auth.middleware');
 const autoriserRoles = require('../middleware/role.middleware');
+const antiDoubleSubmit = require('../middleware/antiDoubleSubmit.middleware');
 const { validateRequest } = require('../validators/validateRequest');
 const stockSchemas = require('../validators/stock.validator');
 const {
@@ -20,7 +21,7 @@ router.get('/alertes', alertesStock);
 router.get('/flux', analyseFlux);
 router.post(
   '/mouvements',
-  autoriserRoles('administrateur', 'gerant'),
+  autoriserRoles('administrateur', 'gerant'), antiDoubleSubmit(),
   validateRequest(stockSchemas.mouvement),
   creerMouvement
 );
