@@ -37,6 +37,15 @@ async function createFournisseur(body, user) {
       throw new ApiError(409, 'Un fournisseur avec ce numéro de téléphone existe déjà');
     }
   }
+  {
+    const [rows] = await require('../config/database').query(
+      'SELECT id_fournisseur FROM fournisseur WHERE LOWER(TRIM(nom)) = LOWER(TRIM(?)) LIMIT 1',
+      [String(nom).trim()]
+    );
+    if (rows && rows.length) {
+      throw new ApiError(409, `Un fournisseur nommé « ${String(nom).trim()} » existe déjà`);
+    }
+  }
 
   const id = await fournisseurRepository.createFournisseur({
     nom: String(nom).trim(),
