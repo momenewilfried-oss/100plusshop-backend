@@ -1,4 +1,3 @@
-
 const pool = require('../config/database');
 
 /**
@@ -127,17 +126,81 @@ async function updateVarianteStock(db, idVariante, nouveauStock) {
   ]);
 }
 
-async function insertMouvement(db, { idVariante, typeMouvement, quantite, motif }) {
-  const [r] = await db.query(
-    `INSERT INTO mouvement_stock
-       (variante, typeMouvement, quantite, motif, documentType, documentId, dateMouvement)
-     VALUES (?, ?, ?, ?, 'manuel', NULL, NOW())`,
-    [idVariante, typeMouvement, quantite, motif || 'Mouvement manuel']
-  );
-  return r.insertId;
+
+async function findByIdempotencyKey(key) {
+  if (!key) return null;
+  try {
+    const [rows] = await pool.query(
+      'SELECT * FROM mouvement_stock WHERE idempotency_key = ? LIMIT 1',
+      [String(key).slice(0, 64)]
+    );
+    return rows[0] || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function findRecentSameMouvement(idVariante, typeMouvement, quantite, windowSeconds = 10) {
+  try {
+    const [rows] = await pool.query(
+      `SELECT * FROM mouvement_stock
+       WHERE variante = ?
+         AND "typeMouvement" = ?
+         AND quantite = ?
+         AND "dateMouvement" >= NOW() - (? * INTERVAL '1 second')
+       ORDER BY "idMouvement" DESC
+       LIMIT 1`,
+      [idVariante, typeMouvement, quantite, windowSeconds]
+    );
+    return rows[0] || null;
+  } catch (_) {
+    try {
+      const [rows] = await pool.query(
+        `SELECT * FROM mouvement_stock
+         WHERE variante = ?
+           AND typeMouvement = ?
+           AND quantite = ?
+           AND dateMouvement >= NOW() - INTERVAL '10 seconds'
+         ORDER BY idMouvement DESC LIMIT 1`,
+        [idVariante, typeMouvement, quantite]
+      );
+      return rows[0] || null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+async function insertMouvement(db, { idVariante, typeMouvement, quantite, motif, idempotencyKey }) {
+  const key = idempotencyKey ? String(idempotencyKey).slice(0, 64) : null;
+  try {
+    const [r] = await db.query(
+      `INSERT INTO mouvement_stock
+       (variante, "typeMouvement", quantite, motif, "dateMouvement", idempotency_key)
+       VALUES (?, ?, ?, ?, NOW(), ?)`,
+      [idVariante, typeMouvement, quantite, motif || null, key]
+    );
+    return r.insertId ?? r[0]?.idMouvement ?? r.rows?.[0]?.idMouvement;
+  } catch (e) {
+    const msg = String(e.message || e);
+    if (key && /duplicate|unique/i.test(msg)) {
+      const ex = await findByIdempotencyKey(key);
+      if (ex) return ex.idMouvement || ex.id_mouvement;
+    }
+    // fallback sans idempotency_key
+    const [r] = await db.query(
+      `INSERT INTO mouvement_stock
+       (variante, "typeMouvement", quantite, motif, "dateMouvement")
+       VALUES (?, ?, ?, ?, NOW())`,
+      [idVariante, typeMouvement, quantite, motif || null]
+    );
+    return r.insertId ?? r[0]?.idMouvement ?? r.rows?.[0]?.idMouvement;
+  }
 }
 
 module.exports = {
+  findByIdempotencyKey,
+  findRecentSameMouvement,
   resumeStocks,
   listMouvements,
   alertesStock,
