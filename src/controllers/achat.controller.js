@@ -21,8 +21,11 @@ async function obtenirAchat(req, res, next) {
 
 async function creerAchat(req, res, next) {
   try {
-    const result = await achatService.createAchat(req.body || {}, req.utilisateur);
-    res.status(201).json(result);
+    const body = { ...(req.body || {}) };
+    const hk = req.headers['idempotency-key'] || req.headers['x-idempotency-key'];
+    if (hk && !body.idempotencyKey) body.idempotencyKey = String(hk);
+    const result = await achatService.createAchat(body || {}, req.utilisateur);
+    res.status(result && result.replay ? 200 : 201).json(result);
   } catch (erreur) {
     next(erreur);
   }
