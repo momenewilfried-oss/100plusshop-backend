@@ -21,8 +21,11 @@ async function obtenirPromotion(req, res, next) {
 
 async function creerPromotion(req, res, next) {
   try {
-    const row = await promotionService.createPromotion(req.body || {}, req.utilisateur);
-    res.status(201).json(row);
+    const body = { ...(req.body || {}) };
+    const hk = req.headers['idempotency-key'] || req.headers['x-idempotency-key'];
+    if (hk && !body.idempotencyKey) body.idempotencyKey = String(hk);
+    const row = await promotionService.createPromotion(body, req.utilisateur);
+    res.status(row && row.replay ? 200 : 201).json(row);
   } catch (erreur) {
     next(erreur);
   }
