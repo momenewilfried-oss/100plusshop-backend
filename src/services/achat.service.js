@@ -1,4 +1,3 @@
-
 const { ApiError } = require('../utils/error-handler');
 const pool = require('../config/database');
 
@@ -60,7 +59,18 @@ async function getAchat(id) {
   return { ...rows[0], details };
 }
 
-async function createAchat({ idFournisseur, lignes } = {}) {
+async function createAchat({ idFournisseur, lignes, idempotencyKey } = {}) {
+  const key = idempotencyKey ? String(idempotencyKey).slice(0, 64) : null;
+  if (key) {
+    try {
+      const [ex] = await pool.query(
+        'SELECT * FROM facture_achat WHERE idempotency_key = ? LIMIT 1',
+        [key]
+      );
+      if (ex && ex.length) return { ...ex[0], replay: true };
+    } catch (_) {}
+  }
+
   const db = await pool.getConnection();
   try {
     if (!idFournisseur || !lignes || lignes.length === 0) {
@@ -68,6 +78,22 @@ async function createAchat({ idFournisseur, lignes } = {}) {
     }
 
     await db.beginTransaction();
+
+    if (key) {
+      try {
+        await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [key]);
+      } catch (_) {}
+      try {
+        const [ex2] = await db.query(
+          'SELECT * FROM facture_achat WHERE idempotency_key = ? LIMIT 1',
+          [key]
+        );
+        if (ex2 && ex2.length) {
+          await db.rollback();
+          return { ...ex2[0], replay: true };
+        }
+      } catch (_) {}
+    }
 
     const [four] = await db.query(
       'SELECT id_fournisseur FROM fournisseur WHERE id_fournisseur = ?',
@@ -120,12 +146,33 @@ async function createAchat({ idFournisseur, lignes } = {}) {
     }
 
     const numero = genererNumeroAchat();
-    const [fa] = await db.query(
-      `INSERT INTO facture_achat
-         (id_fournisseur, numero, date_achat, montant_total, statut)
-       VALUES (?, ?, NOW(), ?, 'recue')`,
-      [idFournisseur, numero, montantTotal]
-    );
+    let fa;
+    try {
+      [fa] = await db.query(
+        `INSERT INTO facture_achat
+           (id_fournisseur, numero, date_achat, montant_total, statut, idempotency_key)
+         VALUES (?, ?, NOW(), ?, 'recue', ?)`,
+        [idFournisseur, numero, montantTotal, key]
+      );
+    } catch (e) {
+      const msg = String(e.message || e);
+      if (key && /duplicate|unique/i.test(msg)) {
+        const [ex] = await pool.query(
+          'SELECT * FROM facture_achat WHERE idempotency_key = ? LIMIT 1',
+          [key]
+        );
+        if (ex && ex.length) {
+          await db.rollback();
+          return { ...ex[0], replay: true };
+        }
+      }
+      [fa] = await db.query(
+        `INSERT INTO facture_achat
+           (id_fournisseur, numero, date_achat, montant_total, statut)
+         VALUES (?, ?, NOW(), ?, 'recue')`,
+        [idFournisseur, numero, montantTotal]
+      );
+    }
 
     const idAchat = extractInsertId(fa, 'id_facture_achat');
     if (!idAchat) {
