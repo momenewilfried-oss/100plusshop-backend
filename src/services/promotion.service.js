@@ -67,9 +67,21 @@ async function getPromotion(id) {
   return { ...promo, variantes };
 }
 
-async function createPromotion({ nom, type, valeur: valeurIn, dateDebut, dateFin, date_debut, date_fin, statut, variantes } = {}) {
+async function createPromotion({ nom, type, valeur: valeurIn, dateDebut, dateFin, date_debut, date_fin, statut, variantes, idempotencyKey } = {}) {
   const nomP = String(nom || '').trim();
   if (!nomP) throw new ApiError(400, 'Nom de promotion obligatoire');
+
+  const key = idempotencyKey ? String(idempotencyKey).slice(0, 64) : null;
+  if (key) {
+    try {
+      const [ex] = await pool.query(
+        'SELECT * FROM promotion WHERE idempotency_key = ? LIMIT 1',
+        [key]
+      );
+      if (ex && ex.length) return { ...ex[0], replay: true };
+    } catch (_) {}
+  }
+
   try {
     const [exist] = await pool.query(
       'SELECT id_promotion FROM promotion WHERE LOWER(TRIM(nom)) = LOWER(TRIM(?)) LIMIT 1',
@@ -105,12 +117,31 @@ async function createPromotion({ nom, type, valeur: valeurIn, dateDebut, dateFin
     await db.beginTransaction();
     let insertId;
     try {
-      const [r] = await db.query(
-        `INSERT INTO promotion (nom, type, valeur, date_debut, date_fin, statut)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [nom, type, valeur, dDebut, dFin, statut || 'active']
-      );
-      insertId = r.insertId;
+      try {
+        const [r] = await db.query(
+          `INSERT INTO promotion (nom, type, valeur, date_debut, date_fin, statut, idempotency_key)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [nom, type, valeur, dDebut, dFin, statut || 'active', typeof key !== 'undefined' ? key : null]
+        );
+        insertId = r.insertId ?? r[0]?.id_promotion;
+      } catch (eIns) {
+        if (typeof key !== 'undefined' && key && /duplicate|unique/i.test(String(eIns.message || eIns))) {
+          const [ex] = await pool.query(
+            'SELECT * FROM promotion WHERE idempotency_key = ? LIMIT 1',
+            [key]
+          );
+          if (ex && ex.length) {
+            await db.rollback();
+            return { ...ex[0], replay: true };
+          }
+        }
+        const [r] = await db.query(
+          `INSERT INTO promotion (nom, type, valeur, date_debut, date_fin, statut)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [nom, type, valeur, dDebut, dFin, statut || 'active']
+        );
+        insertId = r.insertId;
+      }
     } catch {
       const [r] = await db.query(
         `INSERT INTO promotion (nom, type, valeur, dateDebut, dateFin, statut)
