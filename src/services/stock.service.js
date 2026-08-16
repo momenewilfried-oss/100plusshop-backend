@@ -37,33 +37,44 @@ async function analyseFlux() {
 }
 
 async function creerMouvement(body, user) {
-  const { idVariante, typeMouvement, quantite, motif } = body || {};
+  const { idVariante, typeMouvement, quantite, motif, idempotencyKey } = body || {};
   if (!idVariante || !typeMouvement || quantite == null) {
     throw new ApiError(400, 'idVariante, typeMouvement et quantite obligatoires');
   }
 
-  // Anti double-clic : même mouvement dans les 5 dernières secondes
-  try {
-    const [dup] = await pool.query(
-      `SELECT 1 AS ok FROM mouvement_stock
-       WHERE variante = ?
-         AND "typeMouvement" = ?
-         AND quantite = ?
-         AND "dateMouvement" >= NOW() - INTERVAL '5 seconds'
-       LIMIT 1`,
-      [idVariante, typeMouvement, Number(quantite)]
-    );
-    if (dup && dup.length) {
-      throw new ApiError(409, 'Mouvement de stock identique déjà enregistré il y a moins de 5 secondes');
+  const key = idempotencyKey ? String(idempotencyKey).slice(0, 64) : null;
+  if (key) {
+    const existing = await stockRepository.findByIdempotencyKey(key);
+    if (existing) {
+      return {
+        message: 'Mouvement déjà enregistré',
+        idMouvement: existing.idMouvement || existing.id_mouvement,
+        nouveau_stock: null,
+        replay: true,
+      };
     }
-  } catch (e) {
-    if (e.statusCode === 409 || e.status === 409) throw e;
-    // colonnes différentes : on ignore le check soft
   }
 
   const db = await pool.getConnection();
   try {
     await db.beginTransaction();
+
+    if (key) {
+      try {
+        await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [key]);
+      } catch (_) {}
+      const again = await stockRepository.findByIdempotencyKey(key);
+      if (again) {
+        await db.rollback();
+        return {
+          message: 'Mouvement déjà enregistré',
+          idMouvement: again.idMouvement || again.id_mouvement,
+          nouveau_stock: null,
+          replay: true,
+        };
+      }
+    }
+
     const variante = await stockRepository.getVarianteForUpdate(db, idVariante);
     if (!variante) throw new ApiError(404, 'Variante introuvable');
 
@@ -78,11 +89,31 @@ async function creerMouvement(body, user) {
     }
 
     await stockRepository.updateVarianteStock(db, idVariante, nouveauStock);
+    // Filet sans clé : même mouvement < 10 s
+    if (!key) {
+      const recent = await stockRepository.findRecentSameMouvement(
+        idVariante,
+        typeMouvement,
+        typeMouvement === 'ajustement' ? Math.abs(qte - Number(variante.stock)) : qte,
+        10
+      );
+      if (recent) {
+        await db.rollback();
+        return {
+          message: 'Mouvement déjà enregistré',
+          idMouvement: recent.idMouvement || recent.id_mouvement,
+          nouveau_stock: Number(variante.stock),
+          replay: true,
+        };
+      }
+    }
+
     const idMouvement = await stockRepository.insertMouvement(db, {
       idVariante,
       typeMouvement,
       quantite: typeMouvement === 'ajustement' ? Math.abs(qte - Number(variante.stock)) : qte,
       motif,
+      idempotencyKey: key,
     });
     await db.commit();
 
