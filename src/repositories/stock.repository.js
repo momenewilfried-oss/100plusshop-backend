@@ -141,61 +141,55 @@ async function findByIdempotencyKey(key) {
 }
 
 async function findRecentSameMouvement(idVariante, typeMouvement, quantite, windowSeconds = 10) {
+  // Pas de guillemets manuels : adaptSql quote déjà typeMouvement, dateMouvement, idMouvement
   try {
     const [rows] = await pool.query(
       `SELECT * FROM mouvement_stock
        WHERE variante = ?
-         AND "typeMouvement" = ?
+         AND typeMouvement = ?
          AND quantite = ?
-         AND "dateMouvement" >= NOW() - (? * INTERVAL '1 second')
-       ORDER BY "idMouvement" DESC
+         AND dateMouvement >= NOW() - INTERVAL '10 seconds'
+       ORDER BY idMouvement DESC
        LIMIT 1`,
-      [idVariante, typeMouvement, quantite, windowSeconds]
+      [idVariante, typeMouvement, quantite]
     );
     return rows[0] || null;
   } catch (_) {
-    try {
-      const [rows] = await pool.query(
-        `SELECT * FROM mouvement_stock
-         WHERE variante = ?
-           AND typeMouvement = ?
-           AND quantite = ?
-           AND dateMouvement >= NOW() - INTERVAL '10 seconds'
-         ORDER BY idMouvement DESC LIMIT 1`,
-        [idVariante, typeMouvement, quantite]
-      );
-      return rows[0] || null;
-    } catch {
-      return null;
-    }
+    return null;
   }
 }
 
 async function insertMouvement(db, { idVariante, typeMouvement, quantite, motif, idempotencyKey }) {
   const key = idempotencyKey ? String(idempotencyKey).slice(0, 64) : null;
-  try {
-    const [r] = await db.query(
-      `INSERT INTO mouvement_stock
-       (variante, "typeMouvement", quantite, motif, "dateMouvement", idempotency_key)
-       VALUES (?, ?, ?, ?, NOW(), ?)`,
-      [idVariante, typeMouvement, quantite, motif || null, key]
-    );
-    return r.insertId ?? r[0]?.idMouvement ?? r.rows?.[0]?.idMouvement;
-  } catch (e) {
-    const msg = String(e.message || e);
-    if (key && /duplicate|unique/i.test(msg)) {
-      const ex = await findByIdempotencyKey(key);
-      if (ex) return ex.idMouvement || ex.id_mouvement;
+  // camelCase SANS guillemets manuels (adaptSql dans database.js les quote une fois)
+  const motifVal = motif || 'Mouvement manuel';
+
+  if (key) {
+    try {
+      const [r] = await db.query(
+        `INSERT INTO mouvement_stock
+         (variante, typeMouvement, quantite, motif, documentType, documentId, dateMouvement, idempotency_key)
+         VALUES (?, ?, ?, ?, 'manuel', NULL, NOW(), ?)`,
+        [idVariante, typeMouvement, quantite, motifVal, key]
+      );
+      return r.insertId ?? r[0]?.idMouvement ?? r.rows?.[0]?.idMouvement;
+    } catch (e) {
+      const msg = String(e.message || e);
+      if (/duplicate|unique/i.test(msg)) {
+        const ex = await findByIdempotencyKey(key);
+        if (ex) return ex.idMouvement || ex.id_mouvement;
+      }
+      // colonne idempotency_key absente → fallback
     }
-    // fallback sans idempotency_key
-    const [r] = await db.query(
-      `INSERT INTO mouvement_stock
-       (variante, "typeMouvement", quantite, motif, "dateMouvement")
-       VALUES (?, ?, ?, ?, NOW())`,
-      [idVariante, typeMouvement, quantite, motif || null]
-    );
-    return r.insertId ?? r[0]?.idMouvement ?? r.rows?.[0]?.idMouvement;
   }
+
+  const [r] = await db.query(
+    `INSERT INTO mouvement_stock
+     (variante, typeMouvement, quantite, motif, documentType, documentId, dateMouvement)
+     VALUES (?, ?, ?, ?, 'manuel', NULL, NOW())`,
+    [idVariante, typeMouvement, quantite, motifVal]
+  );
+  return r.insertId ?? r[0]?.idMouvement ?? r.rows?.[0]?.idMouvement;
 }
 
 module.exports = {
